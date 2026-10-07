@@ -1,0 +1,67 @@
+{
+  "credentials": [
+    {
+      "username": "admin",
+      "password": "admin"
+    },
+    {
+      "username": "cisco",
+      "password": "cisco"
+    },
+    {
+      "username": "junioradmin",
+      "password": "junioradmin"
+    }
+  ],
+
+  "discover": {
+    "ranges": [
+      {
+        "start": "10.0.0.1",
+        "end": "10.0.0.9"
+      },
+      {
+        "start": "10.0.1.34",
+        "end": "10.0.5.255"
+      }
+    ],
+
+    "exclude": [
+      {
+        "start": "10.0.0.2",
+        "end": "10.0.0.2"
+      },
+      {
+        "start": "10.0.1.38",
+        "end": "10.0.1.40"
+      }
+    ]
+  },
+
+  "defaults": {
+    "device_type": "cisco_ios_telnet",
+    "commands": [
+      "show version"
+    ]
+  },
+
+  "devices": {
+    "192.168.1.1": {},
+    "192.168.1.2": {},
+    "192.168.1.3": {},
+    "192.168.1.4": {
+      "commands": [
+        "show interfaces"
+      ]
+    },
+    "192.168.1.5": {},
+    "192.168.1.6": {},
+    "192.168.1.7": {
+      "device_type": "cisco_ios_telnet",
+      "credentials": [
+        "admin",
+        "cisco"
+      ]
+    }
+  }
+}
