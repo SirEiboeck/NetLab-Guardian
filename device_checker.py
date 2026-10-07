@@ -9,20 +9,23 @@ from network_device import NetworkDevice
 
 
 class DeviceChecker:
-    def check(self, device):
+    @staticmethod
+    def check(device):
         for credential in device["credentials"]:
             try:
                 with NetworkDevice(
-                    device["host"],
-                    device["device_type"],
-                    credential,
+                    host=device["host"],
+                    username=credential["username"],
+                    password=credential["password"],
+                    device_type=device["device_type"]
                 ) as connection:
-
                     output = connection.commands(device["commands"])
-
                     return {
                         "status": "ok",
-                        "credential": credential["username"],
+                        "credential": {
+                            "username": credential["username"],
+                            "password": credential["password"]
+                        },
                         "output": output,
                     }
 
@@ -42,14 +45,13 @@ class DeviceChecker:
 class DevicePool:
     def __init__(self, workers=20):
         self.workers = workers
-        self.checker = DeviceChecker()
 
     def run(self, devices):
         results = {}
 
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             futures = {
-                pool.submit(self.checker.check, device): host
+                pool.submit(DeviceChecker.check, device): host
                 for host, device in devices.items()
             }
 

@@ -11,6 +11,12 @@ class NetworkDevice:
             port=23,
         )
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
     def command(self, cmd):
         return self.connection.send_command(cmd)
 

@@ -29,6 +29,10 @@ class Config:
 
         return {
             "host": host,
+            "port": config.get(
+                "port",
+                self.defaults["port"]
+            ),
             "device_type": config.get(
                 "device_type",
                 self.defaults["device_type"],
