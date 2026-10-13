@@ -6,6 +6,7 @@ from netmiko.exceptions import (
 )
 
 from network_device import NetworkDevice
+from python_scripts.data_interpreter import DataInterpreter
 
 
 class DeviceChecker:
@@ -20,13 +21,14 @@ class DeviceChecker:
                     device_type=device["device_type"]
                 ) as connection:
                     output = connection.commands(device["commands"])
+                    status, data = DataInterpreter(output)
                     return {
-                        "status": "ok",
+                        "status": status,
                         "credential": {
                             "username": credential["username"],
                             "password": credential["password"]
                         },
-                        "output": output,
+                        "output": data,
                     }
 
             except NetmikoAuthenticationException:

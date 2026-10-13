@@ -42,7 +42,12 @@
     "port": 23,
     "device_type": "cisco_ios_telnet",
     "commands": [
-      "show version"
+      "show version",
+      "show boot",
+      "show logging profile hardware-diagnostics",
+      "show inventory",
+      "show platform software",
+      "show platform software status control-processor"
     ]
   },
 
