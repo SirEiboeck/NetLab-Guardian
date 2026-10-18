@@ -41,8 +41,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $inputJson = json_encode($data, JSON_PRETTY_PRINT);
 
-    $python = __DIR__ . '/python/.venv/bin/python';
-    $script = __DIR__ . '/python/main.py';
+    $python = __DIR__ . '/python_scripts/.venv/bin/python';
+    $script = __DIR__ . '/python_scripts/main.py';
 
     $process = proc_open(
         escapeshellarg($python) . ' ' . escapeshellarg($script),

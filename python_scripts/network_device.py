@@ -21,7 +21,7 @@ class NetworkDevice:
         return self.connection.send_command(cmd)
 
     def commands(self, cmds):
-        return self.connection.send_multiline(cmds)
+        return {cmd: self.command(cmd) for cmd in cmds}
 
     def close(self):
         self.connection.disconnect()
