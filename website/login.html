@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#02070b">
+  <meta name="description" content="Anmeldung für NetLab Guardian">
+  <title>Anmelden — NetLab Guardian</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="login.js" defer></script>
+</head>
+<body class="login-page">
+  <main class="login-shell">
+    <section class="login-visual" aria-hidden="true">
+      <img src="assets/racks-outline.png" alt="">
+      <div class="login-visual-overlay"></div>
+      <div class="login-visual-copy">
+        <span class="eyebrow">Netzwerkverwaltung</span>
+        <h1>NetLab<br>Guardian</h1>
+        <p>Laborgeräte zentral überwachen und verwalten.</p>
+      </div>
+    </section>
+    <section class="login-card" aria-labelledby="loginTitle">
+      <div class="login-brand brand">NetLab Guardian</div>
+      <div>
+        <div class="eyebrow muted">GESCHÜTZTER BEREICH</div>
+        <h2 id="loginTitle">Anmelden</h2>
+        <p class="login-intro">Melde dich an, um die Netzwerkübersicht aufzurufen.</p>
+      </div>
+      <form id="siteLoginForm" class="device-form site-login-form">
+        <label for="username">Benutzername<input id="username" name="username" autocomplete="username" required autofocus></label>
+        <label for="password">Passwort<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+        <p id="siteLoginError" class="form-error login-error" role="alert" aria-live="polite"></p>
+        <button class="button light login-submit" type="submit">Anmelden</button>
+      </form>
+      <p class="login-footnote">NetLab Guardian · Labor-Netzwerk</p>
+    </section>
+  </main>
+</body>
+</html>
