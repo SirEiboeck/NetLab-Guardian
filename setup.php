@@ -6,7 +6,7 @@ if (PHP_SAPI !== 'cli') {
     http_response_code(404);
     exit;
 }
-require __DIR__ . '/InventoryDB.php';
+require __DIR__ . '/db_internal_api.php';
 
 $username = trim((string) ($argv[1] ?? ''));
 $role = (string) ($argv[2] ?? 'admin');
@@ -26,6 +26,6 @@ if (strlen($password) < 12) {
     fwrite(STDERR, "Mindestens 12 Zeichen erforderlich.\n");
     exit(1);
 }
-$db = new InventoryDB();
+$db = new DBInternalAPI();
 $db->setSiteUser($username, password_hash($password, PASSWORD_DEFAULT), $role);
 echo "Benutzer wurde angelegt/aktualisiert.\n";
