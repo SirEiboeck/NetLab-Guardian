@@ -110,7 +110,7 @@ $flash = takeFlash();
 <body class="admin-page">
     <header class="header"><a class="brand" href="index.php">NetLab Guardian</a><span
             class="admin-page-label">Adminbereich</span>
-        <div class="admin-actions"><a class="button outline" href="index.php">Zur Übersicht</a>
+        <div class="admin-actions"><a class="button outline" href="site_users.php">Benutzer verwalten</a><a class="button outline" href="index.php">Zur Übersicht</a>
             <form class="logout-form" method="post" action="logout.php"><input type="hidden" name="csrf"
                     value="<?= h(csrf()) ?>"><button class="button outline" type="submit">Abmelden</button></form>
         </div>
