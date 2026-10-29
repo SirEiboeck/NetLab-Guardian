@@ -22,8 +22,8 @@ $password = rtrim((string) fgets(STDIN), "\r\n");
 if (function_exists('shell_exec') && DIRECTORY_SEPARATOR === '/')
     @shell_exec('stty echo');
 echo "\n";
-if (strlen($password) < 12) {
-    fwrite(STDERR, "Mindestens 12 Zeichen erforderlich.\n");
+if (strlen($password) <= 5) {
+    fwrite(STDERR, "Mindestens 5 Zeichen erforderlich.\n");
     exit(1);
 }
 $db = new DBInternalAPI();
