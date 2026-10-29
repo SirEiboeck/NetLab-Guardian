@@ -53,14 +53,13 @@ CREATE TABLE command (
     command TEXT PRIMARY KEY
 );
 
+CREATE TABLE IF NOT EXISTS site_user (
+    username TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'viewer'))
+);
+
 CREATE INDEX idx_issue_device_id ON issue(device_id);
 CREATE INDEX idx_issue_open ON issue(resolved_at);
 CREATE INDEX idx_device_credential_credential_id ON device_credential(credential_id);
 CREATE INDEX idx_device_rack ON device(rack_position);
-
--- Example queries:
--- SELECT * FROM device WHERE removed_at IS NULL;
--- SELECT * FROM issue WHERE resolved_at IS NULL;
--- SELECT d.hostname, i.type, i.description, i.detected_at
--- FROM issue AS i JOIN device AS d ON d.id = i.device_id
--- WHERE i.resolved_at IS NULL;
