@@ -354,6 +354,127 @@ function executeRackCheck(array $config): array
     }
 }
 
+/**
+ * Die Python-Ausgabe enthält pro Management-IP ein Ergebnis mit einem Status.
+ * Nur Fehlertexte übernehmen, niemals die ebenfalls zurückgelieferten Credentials
+ * oder die (möglicherweise umfangreichen) Command-Ausgaben.
+ */
+function rackCheckOutcome(mixed $response, array $passwords): array
+{
+    if (!is_array($response)) {
+        return ['error', 'Python-Check: Fehler', 'Für dieses Gerät wurde kein gültiges Prüfergebnis zurückgegeben.'];
+    }
+    $status = $response['status'] ?? null;
+    $statusDetail = null;
+    // Optional bereits für einen späteren Status der Form ["ok", "..."] vorbereitet.
+    if (is_array($status) && array_is_list($status)) {
+        $statusDetail = $status[1] ?? null;
+        $status = $status[0] ?? null;
+    }
+    if ($status === 'ok') {
+        return ['ok', '', ''];
+    }
+    if ($status === 'unreachable') {
+        return ['unreachable', 'Python-Check: Nicht erreichbar', 'Das Gerät war beim Netzwerkcheck nicht erreichbar.'];
+    }
+    if ($status === 'authentication_failed') {
+        return ['authentication_failed', 'Python-Check: Anmeldung fehlgeschlagen', 'Die Anmeldung mit den verwendeten Zugangsdaten ist fehlgeschlagen.'];
+    }
+
+    if ($status === 'error') {
+        $detail = is_string($response['error'] ?? null)
+            ? $response['error']
+            : (is_string($statusDetail) ? $statusDetail : 'Python hat einen Fehler gemeldet.');
+    } else {
+        $detail = is_string($status) && $status !== ''
+            ? 'Unbekannter Prüfstatus: ' . $status
+            : 'Python hat keinen gültigen Prüfstatus geliefert.';
+    }
+    // Ein Netmiko-Fehlertext kann Zugangsdaten enthalten. Vor Speicherung maskieren.
+    foreach ($passwords as $password) {
+        if ($password !== '') {
+            $detail = str_replace($password, '[Passwort verborgen]', $detail);
+        }
+    }
+    $detail = preg_replace('/[\x00-\x1f\x7f]+/u', ' ', $detail) ?? 'Unlesbare Python-Fehlermeldung.';
+    $detail = trim(substr($detail, 0, 1800));
+    return ['error', 'Python-Check: Fehler', $detail !== '' ? $detail : 'Python hat einen Fehler gemeldet.'];
+}
+
+/**
+ * Ordnet die Ergebnisse den Rack-Geräten zu und speichert ausschließlich offene
+ * Python-Fehler in issue. Identische Fehler bleiben ein Eintrag; behobene werden
+ * geschlossen. Andere (manuell erfasste) Störungen bleiben unangetastet.
+ */
+function saveRackCheckResults(DBInternalAPI $db, array $rackDevices, array $plans, array $retries, array $results): array
+{
+    $devicesByIp = [];
+    foreach ($rackDevices as $device) {
+        $ip = trim((string) $device['management_ip']);
+        if (filter_var($ip, FILTER_VALIDATE_IP)) {
+            $devicesByIp[$ip] = $device;
+        }
+    }
+
+    $passwords = [];
+    foreach ($plans as $plan) {
+        foreach ($plan['credentials'] as $password) {
+            $passwords[$password] = $password;
+        }
+    }
+    foreach ($retries as $options) {
+        foreach ($options as $plan) {
+            foreach ($plan['credentials'] as $password) {
+                $passwords[$password] = $password;
+            }
+        }
+    }
+    // Längere Passwörter zuerst ersetzen, damit auch überlappende Werte maskiert werden.
+    $passwords = array_values($passwords);
+    usort($passwords, static fn(string $a, string $b): int => strlen($b) <=> strlen($a));
+
+    $counts = [];
+    $failures = [];
+    foreach ($plans as $plan) {
+        $ip = $plan['ip'];
+        $device = $devicesByIp[$ip]; // Wurde in rackExecutionPlans validiert.
+        $deviceId = (int) $device['id'];
+        [$status, $type, $description] = rackCheckOutcome($results[$ip] ?? null, $passwords);
+        $counts[$status] = ($counts[$status] ?? 0) + 1;
+
+        $existing = array_values(array_filter(
+            $db->all('issue', ['device_id' => $deviceId, 'resolved_at' => null], 10000),
+            static fn(array $issue): bool => str_starts_with((string) $issue['type'], 'Python-Check: ')
+        ));
+        $matchingIssueId = null;
+        foreach ($existing as $issue) {
+            if ($status !== 'ok' && $issue['type'] === $type && $matchingIssueId === null) {
+                $matchingIssueId = (int) $issue['id'];
+                if ($issue['description'] !== $description) {
+                    $db->update('issue', $matchingIssueId, ['description' => $description]);
+                }
+            } else {
+                $db->resolveIssue((int) $issue['id']);
+            }
+        }
+        if ($status !== 'ok') {
+            if ($matchingIssueId === null) {
+                $db->insert('issue', [
+                    'device_id' => $deviceId,
+                    'type' => $type,
+                    'description' => $description,
+                ]);
+            }
+            $deviceName = trim((string) $device['hostname']);
+            $issueLabel = substr($type, strlen('Python-Check: '));
+            $failures[] = ($deviceName !== '' ? $deviceName . ' (' . $ip . ')' : $ip)
+                . ': ' . $issueLabel . ' – ' . $description;
+        }
+        $db->update('device', $deviceId, ['last_checked_at' => gmdate('Y-m-d H:i:s')]);
+    }
+    return [$counts, $failures];
+}
+
 $devices = $db->activeDevices();
 $issues = $db->openIssues();
 // Befehle nur bei angemeldeten Admins für die Check-UI laden.
@@ -404,20 +525,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             set_time_limit(110);
             $results = runRackPlans($defaults, $primary, $retries);
+            // Ergebnisse noch unter dem Rack-Check-Lock speichern, damit ein
+            // zeitgleicher Check keine neueren Befunde überschreiben kann.
+            [$counts, $failures] = saveRackCheckResults($db, $rackDevices, $primary, $retries, $results);
         } finally {
             flock($lock, LOCK_UN);
             fclose($lock);
-        }
-        $counts = [];
-        $failures = [];
-        foreach ($primary as $plan) {
-            $ip = $plan['ip'];
-            $status = $results[$ip]['status'] ?? 'error';
-            if (!is_string($status) || !in_array($status, ['ok', 'unreachable', 'authentication_failed', 'error'], true)) {
-                $status = 'error';
-            }
-            $counts[$status] = ($counts[$status] ?? 0) + 1;
-            if ($status !== 'ok') $failures[] = $ip . ': ' . $status;
         }
         $ok = $counts['ok'] ?? 0;
         $total = count($primary);
@@ -574,7 +687,7 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                                                 <input type="hidden" name="rack" value="<?= $rack ?>">
                                                 <input type="hidden" name="mode" value="custom">
                                                 <label for="rack-json-<?= $rack ?>">JSON-Konfiguration für Rack <?= $rack ?></label>
-                                                <p>Temporäre JSON-Einstellungen: Defaults, Geräte und globale Credentials. Die Passwörter bleiben mit <code>[aus Datenbank]</code> verborgen und werden beim Start serverseitig ergänzt. Du kannst Username oder Passwort im Editor nur für diesen einen Prüflauf ändern oder neue Einträge ohne id hinzufügen. Es wird nichts gespeichert. Die Credentials gelten immer für alle Geräte dieses Racks. Hinweis: Das unveränderte Python-Skript verwendet derzeit immer Port 23.</p>
+                                                <p>Temporäre JSON-Einstellungen: Defaults, Geräte und globale Credentials. Die Passwörter bleiben mit <code>[aus Datenbank]</code> verborgen und werden beim Start serverseitig ergänzt. Du kannst Username oder Passwort im Editor nur für diesen einen Prüflauf ändern oder neue Einträge ohne id hinzufügen. Die JSON-Einstellungen werden nicht gespeichert; Prüfergebnisse und Fehlermeldungen werden den Geräten in SQLite zugeordnet. Die Credentials gelten immer für alle Geräte dieses Racks. Hinweis: Das unveränderte Python-Skript verwendet derzeit immer Port 23.</p>
                                                 <textarea id="rack-json-<?= $rack ?>" name="settings_json" rows="13" maxlength="64000" spellcheck="false" required><?= h($editorJson) ?></textarea>
                                                 <div class="rack-settings-buttons">
                                                     <button type="reset" class="rack-reset-button">Zurücksetzen</button>
