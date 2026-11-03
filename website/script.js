@@ -6,6 +6,7 @@ const tone = {online:'green',warning:'amber',critical:'red',unknown:'neutral'};
 const STORAGE_KEY = 'netlab-guardian-devices-v1';
 const SESSION_KEY = 'netlab-guardian-session-v1';
 const NOTES_KEY = 'netlab-guardian-device-notes-v1';
+const noteIcon = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L9 17l-4 1 1-4Z"/></svg>';
 
 let currentSession = null;
 try { currentSession = JSON.parse(sessionStorage.getItem(SESSION_KEY)); } catch {}
@@ -40,17 +41,23 @@ function renderRacks() {
     const slots = Array.from({length:30}, (_, index) => index+1).map(unit => {
       const device = rackDevices.find(item => item.unit === unit);
       if (!device) return `<div class="empty-unit"><span class="unit">${String(unit).padStart(2,'0')}</span><span>Frei</span></div>`;
-      const noteMarker=deviceNotes[device.id]?'<span class="note-marker" title="Notiz vorhanden" aria-label="Notiz vorhanden">N</span>':'';
-      return `<button class="device ${device.status} ${device.type==='Router'?'router':''} ${deviceNotes[device.id]?'has-note':''}" data-device="${device.id}" aria-label="${escapeHtml(device.name)}, ${statusText[device.status]}${deviceNotes[device.id]?', Notiz vorhanden':''}, Details öffnen"><span class="unit">${String(unit).padStart(2,'0')}</span><span class="device-name" title="${escapeHtml(device.name)}">${escapeHtml(device.name)}</span>${noteMarker}<span class="ports" aria-hidden="true">${Array.from({length:device.type==='Router'?4:16},()=>'<i class="port"></i>').join('')}</span></button>`;
+      const noteMarker=deviceNotes[device.id]?`<span class="note-corner" title="Notiz vorhanden" aria-hidden="true">${noteIcon}</span>`:'';
+      const router = device.type === 'Router';
+      const ear = '<span class="rack-ear" aria-hidden="true"><i class="screw"></i><i class="screw"></i></span>';
+      const ports = '<i class="rj45"></i>'.repeat(router ? 4 : 24);
+      const uplinks = router
+        ? '<span class="router-vents" aria-hidden="true"><span class="system-label">SYSTEM</span><span class="vents"></span><span class="system-label"><i class="console-port"></i>USB</span></span>'
+        : '<span class="uplinks" aria-hidden="true"><span class="uplink-label">SFP</span><span class="sfp-ports"><i class="sfp"></i><i class="sfp"></i></span></span>';
+      return `<button type="button" class="device ${device.status} ${router?'router':''} ${deviceNotes[device.id]?'has-note':''}" data-device="${device.id}" aria-label="${escapeHtml(device.name)}, ${statusText[device.status]}${deviceNotes[device.id]?', Notiz vorhanden':''}, HE ${unit}, Details öffnen"><span class="unit">${String(unit).padStart(2,'0')}</span>${ear}<span class="device-face"><span class="device-identification"><span class="device-id" title="${escapeHtml(device.name)}">${escapeHtml(device.name)}</span><span class="model" title="${escapeHtml(device.model||device.type)}">${escapeHtml(device.model||device.type)}</span><span class="state-text"><i class="led" aria-hidden="true"></i>${statusText[device.status]}</span></span><span class="port-block" aria-hidden="true"><span class="port-caption"><span>${router?'GE 0/0 — 0/3':'FAST ETHERNET'}</span>${router?'':'<span>1–24</span>'}</span><span class="ethernet-ports">${ports}</span><span class="link-leds">${'<i></i>'.repeat(router?4:12)}</span></span>${uplinks}</span>${ear}${noteMarker}</button>`;
     }).join('');
-    return `<article class="rack-card"><div class="rack-heading"><h3>Rack ${rack} - ${rackName(rack)}</h3><span class="pill ${tone[state]}-pill">${label}</span></div><div class="rack-frame">${slots}</div><div class="rack-footer"><span><b>${rackDevices.length} Geräte</b> / ${rackDevices.filter(device=>device.type==='Switch').length} Switches / ${rackDevices.filter(device=>device.type==='Router').length} Router</span><span>${rackDevices.length} / 30 HE</span></div></article>`;
+    return `<article class="rack-card"><div class="rack-heading"><div><h3>Rack ${rack}</h3><p class="rack-network">${rackName(rack)} · 30 HE</p></div><span class="pill ${tone[state]}-pill">${label}</span></div><div class="rack-frame">${slots}</div><div class="rack-footer"><span><b>${rackDevices.length} Geräte</b> / ${rackDevices.filter(device=>device.type==='Switch').length} Switches / ${rackDevices.filter(device=>device.type==='Router').length} Router</span><span>${rackDevices.length} / 30 HE</span></div></article>`;
   }).join('') || '<p class="subtle">Keine Racks mit Problemen.</p>';
 }
 
 function renderTable() {
   const query = $('#search').value.trim().toLowerCase();
   const filtered = devices.filter(device => [device.name,device.ip,device.type,device.model,rackName(device.rack),statusText[device.status]].join(' ').toLowerCase().includes(query)).sort((a,b)=>b.rack-a.rack||b.unit-a.unit);
-  $('#deviceTable').innerHTML = filtered.map(device => `<tr><td>${escapeHtml(device.name)}${deviceNotes[device.id]?'<span class="table-note-marker" title="Notiz vorhanden">N</span>':''}</td><td>${escapeHtml(device.model||device.type)}</td><td>${escapeHtml(device.ip)}</td><td>${rackName(device.rack)} / HE ${device.unit}</td><td>${badge(device.status)}</td><td><button class="text-button" data-device="${device.id}" aria-label="Details zu ${escapeHtml(device.name)}">Details ↗</button></td></tr>`).join('') || '<tr><td colspan="6">Keine Geräte gefunden.</td></tr>';
+  $('#deviceTable').innerHTML = filtered.map(device => `<tr><td>${escapeHtml(device.name)}${deviceNotes[device.id]?`<span class="table-note-marker" title="Notiz vorhanden" aria-label="Notiz vorhanden">${noteIcon}</span>`:''}</td><td>${escapeHtml(device.model||device.type)}</td><td>${escapeHtml(device.ip)}</td><td>${rackName(device.rack)} / HE ${device.unit}</td><td>${badge(device.status)}</td><td><button class="text-button" data-device="${device.id}" aria-label="Details zu ${escapeHtml(device.name)}">Details ↗</button></td></tr>`).join('') || '<tr><td colspan="6">Keine Geräte gefunden.</td></tr>';
   $('#resultCount').textContent = `${filtered.length} von ${devices.length} Geräten`;
 }
 
@@ -59,7 +66,7 @@ function renderIssues() {
     const device = devices.find(item => item.id === issue.id);
     if (!device) return '';
     return `<div class="issue-row"><span class="issue-icon ${device.status==='warning'?'warn':''}">!</span><div class="issue-copy"><strong>${issue.title}</strong><p>${escapeHtml(device.name)} / ${rackName(device.rack)} — ${issue.description}</p></div><button class="text-button" data-device="${device.id}">Prüfen ↗</button></div>`;
-  }).join('');
+  }).join('') || '<p class="subtle">Keine offenen Probleme vorhanden.</p>';
 }
 
 function renderStats() {
