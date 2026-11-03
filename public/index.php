@@ -135,6 +135,7 @@ function rackDiscoveryTargets(mixed $discover): array
 /**
  * Erstellt Prüfpläne für Rack-Geräte und zusätzliche IPs aus discover.ranges.
  * Standardzugangsdaten stammen aus SQLite; im Browser erscheinen nur Platzhalter.
+ * Geräten explizit zugeordnete Credentials haben Vorrang vor dem globalen Pool.
  * Das unveränderte Python-Config-Modul identifiziert Credentials am Benutzernamen.
  */
 function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settings): array
@@ -155,7 +156,7 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
         }
     }
 
-    // DB-Credentials sind global. Ohne eigenen credentials-Eintrag werden alle genutzt.
+    // Globale DB-Credentials; eine Gerätezuordnung schränkt die Auswahl pro Gerät ein.
     $credentialRows = $db->all('credential', [], 10000);
     $credentialsById = [];
     foreach ($credentialRows as $row) {
@@ -174,12 +175,18 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
         ], $credentialRows);
     }
 
-    $byUsername = [];
+    // Die IDs dienen der dauerhaften Zuordnung eines Credentials zu einem Gerät.
+    // Ein Eintrag ohne ID bleibt weiterhin als temporäres JSON-Credential möglich.
+    $effectiveCredentials = [];
     foreach ($entries as $credential) {
         if (!is_array($credential) || array_diff(array_keys($credential), ['id', 'username', 'password']) ||
             !isset($credential['username'], $credential['password']) ||
             !is_string($credential['username']) || !is_string($credential['password'])) {
             throw new RuntimeException('Jedes Credential benötigt username und password (optional: id).');
+        }
+        $id = $credential['id'] ?? null;
+        if ($id !== null && (!is_int($id) || !isset($credentialsById[$id]))) {
+            throw new RuntimeException('Ungültige Credential-id in der JSON-Konfiguration.');
         }
         $username = trim($credential['username']);
         $password = $credential['password'];
@@ -188,18 +195,15 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
             throw new RuntimeException('Credential enthält einen ungültigen Benutzernamen oder ein ungültiges Passwort.');
         }
         if ($password === RACK_DB_PASSWORD) {
-            $id = $credential['id'] ?? null;
-            if (!is_int($id) || !isset($credentialsById[$id])) {
+            if ($id === null) {
                 throw new RuntimeException('Für [aus Datenbank] ist eine gültige Credential-id erforderlich.');
             }
             $password = (string) $credentialsById[$id]['pwd'];
         }
-        if (!isset($byUsername[$username]) || !in_array($password, $byUsername[$username], true)) {
-            $byUsername[$username][] = $password;
-        }
+        $effectiveCredentials[] = ['id' => $id, 'username' => $username, 'password' => $password];
     }
-    if (!$byUsername) {
-        throw new RuntimeException('Keine Zugangsdaten ausgewählt. Bitte credentials in SQLite oder im JSON ergänzen.');
+    if (!$effectiveCredentials) {
+        throw new RuntimeException('Keine Zugangsdaten ausgewählt. Bitte Credentials unter „Credentials verwalten“ anlegen oder im JSON ergänzen.');
     }
 
     $scanTargets = rackDiscoveryTargets($settings['discover'] ?? null);
@@ -238,9 +242,37 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
     $primary = [];
     $retries = [];
     $skipped = 0;
+    $assignmentCache = [];
     foreach ($targetOptions as $ip => $options) {
-        // Alle globalen Credentials werden für jedes Gerät versucht.
-        // Doppelte Benutzernamen mit anderen Passwörtern laufen als Folgeversuche.
+        // Nur bei expliziter Gerätezuordnung die globale Liste einschränken.
+        // Geräte ohne Zuordnung und noch nicht inventarisierte Scan-IPs
+        // verwenden weiterhin alle Credentials der JSON-Konfiguration.
+        $assignedIds = [];
+        if (isset($knownGlobally[$ip])) {
+            $deviceId = (int) $knownGlobally[$ip]['id'];
+            if (!array_key_exists($deviceId, $assignmentCache)) {
+                $assignmentCache[$deviceId] = array_fill_keys(array_map(
+                    static fn(array $row): int => (int) $row['id'],
+                    $db->deviceCredentials($deviceId)
+                ), true);
+            }
+            $assignedIds = $assignmentCache[$deviceId];
+        }
+        $byUsername = [];
+        foreach ($effectiveCredentials as $credential) {
+            if ($assignedIds && ($credential['id'] === null || !isset($assignedIds[$credential['id']]))) {
+                continue;
+            }
+            $username = $credential['username'];
+            $password = $credential['password'];
+            if (!isset($byUsername[$username]) || !in_array($password, $byUsername[$username], true)) {
+                $byUsername[$username][] = $password;
+            }
+        }
+        if (!$byUsername) {
+            throw new RuntimeException('Für ' . $ip . ' sind keine zugeordneten Credentials im JSON enthalten. Bitte die Credential-Auswahl prüfen.');
+        }
+        // Gleiche Benutzernamen mit mehreren Passwörtern werden nacheinander probiert.
         $selected = [];
         foreach ($byUsername as $username => $passwords) {
             $selected[$username] = $passwords[0];
@@ -843,7 +875,7 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                     class="nav-count"><?= count($issues) ?></span></a></nav>
         <div class="header-actions"><span class="user-badge"><?= h($_SESSION['user']) ?> ·
                 <?= h($_SESSION['role']) ?></span><?php if (isAdmin()): ?><a class="button outline"
-                    href="admin.php">Adminbereich</a><?php endif; ?>
+                    href="admin.php">Adminbereich</a><a class="button outline" href="credentials.php">Credentials</a><?php endif; ?>
             <form class="logout-form" method="post" action="logout.php"><input type="hidden" name="csrf"
                     value="<?= h(csrf()) ?>"><button class="button outline" type="submit">Abmelden</button></form>
         </div>
@@ -936,7 +968,7 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                                                 <input type="hidden" name="rack" value="<?= $rack ?>">
                                                 <input type="hidden" name="mode" value="custom">
                                                 <label for="rack-json-<?= $rack ?>">JSON-Konfiguration für Rack <?= $rack ?></label>
-                                                <p>Temporäre JSON-Einstellungen: <code>discover.ranges</code> definiert die zu scannenden IPv4-Bereiche und <code>discover.exclude</code> nimmt IPs nur vom Range-Scan aus (explizite <code>devices</code> bleiben aktiv). Das Rack-Netz 10.78.<?= $rack ?>.1–254 ist voreingestellt. Unter <code>devices</code> bleiben vorhandene Geräte separat konfigurierbar. Unbelegte IPs erzeugen keine Fehler. Erreichbare, vom Python-Skript erkannte neue Geräte werden im Rack registriert, vorläufig einer freien HE zugewiesen und können anschließend im Adminbereich bearbeitet werden. Falls das Rack voll ist, werden sie ohne HE registriert. Bereits vorhandene Geräte bleiben in ihrem Rack; gemeldete Fehler werden gespeichert. Die Passwörter bleiben mit <code>[aus Datenbank]</code> verborgen und werden beim Start serverseitig ergänzt. Du kannst Username oder Passwort im Editor nur für diesen einen Prüflauf ändern oder neue Einträge ohne id hinzufügen. Die JSON-Einstellungen werden nicht gespeichert; Inventar und Prüfergebnisse werden in SQLite gespeichert. Die Credentials gelten für alle geprüften Geräte. Hinweis: Das unveränderte Python-Skript verwendet derzeit immer Port 23.</p>
+                                                <p>Temporäre JSON-Einstellungen: <code>discover.ranges</code> definiert die zu scannenden IPv4-Bereiche und <code>discover.exclude</code> nimmt IPs nur vom Range-Scan aus (explizite <code>devices</code> bleiben aktiv). Das Rack-Netz 10.78.<?= $rack ?>.1–254 ist voreingestellt. Unter <code>devices</code> bleiben vorhandene Geräte separat konfigurierbar. Unbelegte IPs erzeugen keine Fehler. Erreichbare, vom Python-Skript erkannte neue Geräte werden im Rack registriert, vorläufig einer freien HE zugewiesen und können anschließend im Adminbereich bearbeitet werden. Falls das Rack voll ist, werden sie ohne HE registriert. Bereits vorhandene Geräte bleiben in ihrem Rack; gemeldete Fehler werden gespeichert. Die Passwörter bleiben mit <code>[aus Datenbank]</code> verborgen und werden beim Start serverseitig ergänzt. Du kannst Username oder Passwort im Editor nur für diesen einen Prüflauf ändern oder neue Einträge ohne id hinzufügen. Die JSON-Einstellungen werden nicht gespeichert; Inventar und Prüfergebnisse werden in SQLite gespeichert. Gespeicherte Zugangsdaten lassen sich unter <a href="credentials.php">Credentials verwalten</a> bearbeiten und einzelnen Geräten zuordnen. Ohne Gerätezuordnung werden alle globalen Credentials verwendet; bei einer Zuordnung nur diese. Hinweis: Das unveränderte Python-Skript verwendet derzeit immer Port 23.</p>
                                                 <textarea id="rack-json-<?= $rack ?>" name="settings_json" rows="13" maxlength="64000" spellcheck="false" required><?= h($editorJson) ?></textarea>
                                                 <div class="rack-settings-buttons">
                                                     <button type="reset" class="rack-reset-button">Zurücksetzen</button>
