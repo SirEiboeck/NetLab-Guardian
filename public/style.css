@@ -2482,3 +2482,81 @@ th {
     .rack-run-button { font-size: 10pt; padding: 6px 8px; }
     .rack-settings-panel { top: 78px; }
 }
+
+/* Geräte-Credentials: gut lesbar auch bei langen Zugangsdaten */
+.credential-secret {
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    font-size: 12px;
+}
+.credential-choices {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 10px;
+    margin: 16px 0;
+}
+.device-form .credential-choice {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: 6px;
+    padding: 14px;
+    margin: 0;
+    cursor: pointer;
+}
+.device-form .credential-choice input[type="checkbox"] {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    accent-color: var(--red);
+}
+.credential-choice small {
+    color: var(--muted);
+}
+.credentials-page .panel {
+    margin-bottom: 24px;
+}
+
+/* Manuelle Checks und IP-Scan sind getrennt; Rack-Ausschlüsse werden dauerhaft gespeichert. */
+.rack-actions form { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.rack-run-scan { background: #283329; border-color: #486454; color: #d2f3db; }
+.rack-run-scan:hover { background: #364b39; }
+/* Schloss im Rack, direkt neben dem Namen. Die Zeile bleibt separat anklickbar. */
+.rack-frame .device.check-excluded { opacity: .82; border-style: dashed; }
+.rack-frame .device { isolation: isolate; }
+.device-row-link {
+    position: absolute; inset: 0; border-radius: inherit; z-index: 1;
+}
+.device-row-link:focus-visible { outline: 2px solid #7ccbf7; outline-offset: 2px; }
+.rack-frame .device .note-marker { position: relative; z-index: 2; text-decoration: none; }
+.device-lock-form { position: relative; z-index: 2; flex: 0 0 auto; margin: 0; display: flex; }
+.device-lock-button, .device-lock-readonly {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 auto; width: 25px; height: 25px; padding: 3px;
+    border: 1px solid transparent; border-radius: 5px;
+    background: transparent; color: #819dab;
+}
+.device-lock-button { cursor: pointer; }
+.device-lock-button:hover { border-color: #5e859d; background: #17435a; color: #e1f6ff; }
+.device-lock-button:focus-visible { outline: 2px solid #7ccbf7; outline-offset: 2px; }
+.device-lock-button.is-locked, .device-lock-readonly { color: #f3bf6b; background: #3a2b1a; border-color: #99723b; }
+.device-lock-button.is-locked:hover { background: #574023; color: #ffe2a7; }
+.rack-frame .device-name { flex: 0 1 auto; }
+.rack-frame .device .ports { margin-left: auto; }
+.unpositioned-device { display: inline-flex; align-items: center; gap: 3px; margin: 2px 9px 2px 0; }
+.unpositioned-device .device-lock-button, .unpositioned-device .device-lock-readonly { width: 23px; height: 23px; }
+@media (max-width: 750px) {
+    .rack-actions { flex-wrap: wrap; justify-content: flex-end; }
+    .rack-run-button { white-space: normal; text-align: center; }
+    .rack-settings-panel { top: 102px; }
+}
+@media (max-width: 650px) {
+    .rack-heading { flex-wrap: wrap; gap: 12px; }
+    .rack-actions { width: 100%; justify-content: flex-start; }
+    .rack-actions form { justify-content: flex-start; }
+    .rack-settings-panel { top: 145px; }
+    .rack-settings-buttons { flex-wrap: wrap; }
+    .rack-run-custom { flex: 1 1 150px; }
+}

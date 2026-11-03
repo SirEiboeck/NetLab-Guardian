@@ -69,7 +69,7 @@ $flash = takeFlash();
     <header class="header"><a class="brand" href="index.php">NetLab Guardian</a>
         <div class="header-actions"><a class="button outline" href="index.php#inventory">Zur
                 Übersicht</a><?php if (isAdmin()): ?><a class="button outline"
-                    href="admin.php?edit=<?= $id ?>#editor">Bearbeiten</a><?php endif; ?>
+                    href="admin.php?edit=<?= $id ?>#editor">Bearbeiten</a><a class="button outline" href="credentials.php?device=<?= $id ?>#assignment">Credentials</a><?php endif; ?>
             <form class="logout-form" method="post" action="logout.php"><input type="hidden" name="csrf"
                     value="<?= h(csrf()) ?>"><button class="button outline">Abmelden</button></form>
         </div>
@@ -98,6 +98,7 @@ $flash = takeFlash();
                     'Inventarnummer' => $device['inventory_number'],
                     'Erstmals gesehen' => $device['first_seen'],
                     'Zuletzt geprüft' => $device['last_checked_at'],
+                    'Prüfung und IP-Scan' => (int) ($device['check_excluded'] ?? 0) === 1 ? 'Ausgeschlossen' : 'Aktiv',
                 ] as $label => $value): ?>
                     <div><span><?= h($label) ?></span><b><?= h($value ?: '—') ?></b></div><?php endforeach; ?>
             </div>

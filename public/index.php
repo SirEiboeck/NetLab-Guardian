@@ -22,7 +22,7 @@ function rackEditableConfig(int $rack, array $rackDevices, array $commands, arra
             'username' => (string) $row['username'],
             'password' => RACK_DB_PASSWORD,
         ], $credentialRows),
-        // Ohne zusätzliche Konfiguration wird das zum Rack gehörende /24 geprüft.
+        // Der IP-Scan verwendet standardmäßig das zum Rack gehörende /24.
         // Diese Adressbereiche können vor jedem Lauf im JSON geändert werden.
         'discover' => [
             'ranges' => [['start' => "10.78.$rack.1", 'end' => "10.78.$rack.254"]],
@@ -138,7 +138,7 @@ function rackDiscoveryTargets(mixed $discover): array
  * Geräten explizit zugeordnete Credentials haben Vorrang vor dem globalen Pool.
  * Das unveränderte Python-Config-Modul identifiziert Credentials am Benutzernamen.
  */
-function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settings): array
+function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settings, bool $includeScan = true): array
 {
     if (!is_array($settings) || array_diff(array_keys($settings), ['credentials', 'defaults', 'devices', 'discover']) ||
         !isset($settings['defaults'], $settings['devices']) || !is_array($settings['devices'])) {
@@ -206,7 +206,8 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
         throw new RuntimeException('Keine Zugangsdaten ausgewählt. Bitte Credentials unter „Credentials verwalten“ anlegen oder im JSON ergänzen.');
     }
 
-    $scanTargets = rackDiscoveryTargets($settings['discover'] ?? null);
+    // Der normale Prüf-Button berücksichtigt discover.ranges ausdrücklich NICHT.
+    $scanTargets = $includeScan ? rackDiscoveryTargets($settings['discover'] ?? null) : [];
     // Auch ein Gerät in einem anderen Rack zählt als bereits inventarisiert,
     // falls ein Administrator dessen IP-Bereich explizit zum Scan hinzufügt.
     $knownGlobally = [];
@@ -219,18 +220,33 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
             $knownGlobally[$ip] = $device;
         }
     }
+    // Dauerhafte Ausschlüsse sind verbindlich – auch bei manuell bearbeitetem JSON
+    // und bei bekannten Geräten aus einem anderen Rack innerhalb eines Scanbereichs.
+    $excludedDevices = [];
+    foreach ($rackDevices as $device) {
+        if ((int) ($device['check_excluded'] ?? 0) === 1) {
+            $excludedDevices[(int) $device['id']] = true;
+        }
+    }
     $scanOnlyIps = [];
     $targetOptions = [];
     foreach ($settings['devices'] as $ip => $options) {
         if (!is_string($ip) || !isset($known[$ip])) {
             throw new RuntimeException('Unter devices dürfen nur Management-IPs des gewählten Racks stehen.');
         }
-        $targetOptions[$ip] = validCheckOptions($options, true);
+        $validated = validCheckOptions($options, true);
+        if ((int) ($known[$ip]['check_excluded'] ?? 0) === 1) {
+            continue;
+        }
+        $targetOptions[$ip] = $validated;
     }
-    // Im Bereich erkannte bekannte Geräte immer prüfen, auch wenn sie nicht
-    // ausdrücklich unter devices stehen. Neue IPs werden nach einem gültigen
-    // Erkennungsergebnis im gewählten Rack inventarisiert.
+    // Im Scanbereich auch andere bereits inventarisierte Geräte berücksichtigen,
+    // ausgenommene Geräte jedoch niemals abfragen oder als neu registrieren.
     foreach ($scanTargets as $ip => $_) {
+        if (isset($knownGlobally[$ip]) && (int) ($knownGlobally[$ip]['check_excluded'] ?? 0) === 1) {
+            $excludedDevices[(int) $knownGlobally[$ip]['id']] = true;
+            continue;
+        }
         if (!isset($targetOptions[$ip])) {
             $targetOptions[$ip] = [];
         }
@@ -285,10 +301,10 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
         }
         $primary[] = ['ip' => $ip, 'options' => $options, 'credentials' => $selected];
     }
-    if (!$primary && !$scanTargets) {
-        throw new RuntimeException('Keine Prüfziele gefunden. Bitte Management-IPs oder discover.ranges hinterlegen.');
+    if (!$primary && !$scanTargets && !$excludedDevices) {
+        throw new RuntimeException('Keine Prüfziele gefunden. Bitte Management-IPs hinterlegen oder den IP-Scan starten.');
     }
-    return [$defaults, $primary, $retries, $skipped, $scanOnlyIps, count($scanTargets)];
+    return [$defaults, $primary, $retries, $skipped, $scanOnlyIps, count($scanTargets), count($excludedDevices)];
 }
 
 /**
@@ -738,6 +754,44 @@ function saveRackCheckResults(
     return [$counts, $failures, $registered, $withoutUnit];
 }
 
+/** Kleines Schloss direkt am Gerätenamen: geschlossen = Prüfung und Scan aus. */
+function rackLockIcon(bool $excluded): string
+{
+    $shackle = $excluded
+        ? '<path d="M8 11V7a4 4 0 0 1 8 0v4"/>'
+        : '<path d="M8 11V7a4 4 0 0 1 7.5-2"/>';
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/>' . $shackle . '</svg>';
+}
+
+/** Separates POST-Formular, damit ein Klick auf das Schloss keine Geräteseite öffnet. */
+function rackLockControl(array $device, int $rack): void
+{
+    $excluded = (int) ($device['check_excluded'] ?? 0) === 1;
+    if (!isAdmin()) {
+        if ($excluded) {
+            echo '<span class="device-lock-readonly" title="Von Prüfung und IP-Scan ausgeschlossen">' . rackLockIcon(true) . '</span>';
+        }
+        return;
+    }
+    $name = (string) ($device['hostname'] ?: 'Gerät ' . $device['id']);
+    $nextExcluded = $excluded ? 0 : 1;
+    $label = $excluded
+        ? $name . ': Ausschluss aufheben (wieder prüfen und scannen)'
+        : $name . ': von Prüfung und IP-Scan ausschließen';
+    ?>
+    <form class="device-lock-form" method="post" action="index.php#rack-<?= $rack ?>">
+        <input type="hidden" name="csrf" value="<?= h(csrf()) ?>">
+        <input type="hidden" name="rack" value="<?= $rack ?>">
+        <input type="hidden" name="mode" value="toggle_exclusion">
+        <input type="hidden" name="device_id" value="<?= (int) $device['id'] ?>">
+        <input type="hidden" name="exclude" value="<?= $nextExcluded ?>">
+        <button class="device-lock-button <?= $excluded ? 'is-locked' : '' ?>" type="submit"
+            title="<?= h($label) ?>" aria-label="<?= h($label) ?>"
+            aria-pressed="<?= $excluded ? 'true' : 'false' ?>"><?= rackLockIcon($excluded) ?></button>
+    </form>
+    <?php
+}
+
 $devices = $db->all('device', ['removed_at' => null], 10000);
 $issues = $db->openIssues();
 // Befehle nur bei angemeldeten Admins für die Check-UI laden.
@@ -760,68 +814,107 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $mode = (string) ($_POST['mode'] ?? '');
     try {
         $rackDevices = array_values(array_filter($devices, static fn(array $device): bool => rackScanPosition($device['rack_position'])[0] === $rack));
-        if ($mode === 'default') {
-            $settings = rackEditableConfig($rack, $rackDevices, $checkCommands, $checkCredentialRows);
-            $settings['devices'] = (array) $settings['devices'];
-            foreach ($settings['devices'] as &$options) $options = [];
-            unset($options);
-        } elseif ($mode === 'custom') {
-            $raw = (string) ($_POST['settings_json'] ?? '');
-            if (strlen($raw) > 64_000) {
-                throw new RuntimeException('JSON-Konfiguration darf maximal 64 KB groß sein.');
+
+        if ($mode === 'toggle_exclusion') {
+            $deviceId = positiveId($_POST['device_id'] ?? null);
+            $exclude = (string) ($_POST['exclude'] ?? '');
+            if ($deviceId < 1 || !in_array($exclude, ['0', '1'], true)) {
+                throw new RuntimeException('Ungültige Geräte- oder Schloss-Auswahl.');
             }
-            $settings = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+            // Derselbe Lock wie beim Check verhindert Änderungen während eines Prüflaufs.
+            $lock = fopen(dirname(__DIR__) . '/storage/rack_check.lock', 'c');
+            if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
+                throw new RuntimeException('Es läuft bereits ein Rack-Check. Bitte anschließend erneut versuchen.');
+            }
+            try {
+                // Gerätezugehörigkeit unter dem Lock frisch prüfen (nicht aus altem HTML übernehmen).
+                $currentDevice = $db->get('device', $deviceId);
+                if ($currentDevice === null || $currentDevice['removed_at'] !== null
+                    || rackScanPosition($currentDevice['rack_position'])[0] !== $rack) {
+                    throw new RuntimeException('Dieses Gerät gehört nicht mehr zum ausgewählten Rack.');
+                }
+                if ((int) ($currentDevice['check_excluded'] ?? 0) !== (int) $exclude) {
+                    $db->update('device', $deviceId, ['check_excluded' => (int) $exclude]);
+                }
+            } finally {
+                flock($lock, LOCK_UN);
+                fclose($lock);
+            }
+            // Der neue Schlosszustand ist direkt nach dem Redirect sichtbar.
         } else {
-            throw new RuntimeException('Unbekannte Prüfaktion.');
-        }
-        [$defaults, $primary, $retries, $skipped, $scanOnlyIps, $scanSize] = rackExecutionPlans($db, $rackDevices, $settings);
-        foreach ($rackDevices as $device) {
-            if (!filter_var(trim((string) $device['management_ip']), FILTER_VALIDATE_IP)) {
-                ++$skipped;
+            // Sämtliche Planung und Ausführung unter demselben Lock wie die
+            // Ausschlussverwaltung: keine veralteten Flags aus parallelen Requests.
+            $lock = fopen(dirname(__DIR__) . '/storage/rack_check.lock', 'c');
+            if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
+                throw new RuntimeException('Es läuft bereits ein Rack-Check. Bitte danach erneut starten.');
+            }
+            try {
+                $devices = $db->all('device', ['removed_at' => null], 10000);
+                $rackDevices = array_values(array_filter($devices, static fn(array $device): bool => rackScanPosition($device['rack_position'])[0] === $rack));
+                $action = (string) ($_POST['action'] ?? '');
+                if (!in_array($action, ['check', 'scan'], true)) {
+                    throw new RuntimeException('Bitte „Prüfen“ oder „IP-Scan + Prüfen“ auswählen.');
+                }
+                $includeScan = $action === 'scan';
+                if ($mode === 'default') {
+                    $settings = rackEditableConfig($rack, $rackDevices, $checkCommands, $checkCredentialRows);
+                    $settings['devices'] = (array) $settings['devices'];
+                    foreach ($settings['devices'] as &$options) $options = [];
+                    unset($options);
+                } elseif ($mode === 'custom') {
+                    $raw = (string) ($_POST['settings_json'] ?? '');
+                    if (strlen($raw) > 64_000) {
+                        throw new RuntimeException('JSON-Konfiguration darf maximal 64 KB groß sein.');
+                    }
+                    $settings = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+                } else {
+                    throw new RuntimeException('Unbekannte Prüfaktion.');
+                }
+                [$defaults, $primary, $retries, $skipped, $scanOnlyIps, $scanSize, $skippedExcluded] = rackExecutionPlans(
+                    $db, $rackDevices, $settings, $includeScan
+                );
+                foreach ($rackDevices as $device) {
+                    if ((int) ($device['check_excluded'] ?? 0) !== 1 && !filter_var(trim((string) $device['management_ip']), FILTER_VALIDATE_IP)) {
+                        ++$skipped;
+                    }
+                }
+                set_time_limit(130);
+                // Nur beim IP-Scan unbekannte IPs per TCP vortesten.
+                [$primary, $retries, $scanResponsive] = $includeScan
+                    ? rackFilterDiscoveryPlans($primary, $retries, $scanOnlyIps)
+                    : [$primary, $retries, 0];
+                $results = $primary ? runRackPlans($defaults, $primary, $retries) : [];
+                [$counts, $failures, $registered, $withoutUnit] = saveRackCheckResults(
+                    $db, $devices, $primary, $retries, $results, $rack, $scanOnlyIps
+                );
+                $ok = $counts['ok'] ?? 0;
+                $total = array_sum($counts);
+                $message = "Rack $rack: $ok von $total Geräten erfolgreich geprüft";
+                if ($includeScan) {
+                    $message .= "; IP-Scan: $scanSize Adressen, $scanResponsive bisher unbekannte IPs mit offenem Telnet-Port";
+                    $message .= ', ' . count($registered) . ' neue Geräte im Rack registriert';
+                    if ($withoutUnit) $message .= " ($withoutUnit ohne freie HE)";
+                }
+                if ($skippedExcluded) $message .= ", $skippedExcluded Gerät(e) dauerhaft ausgeschlossen";
+                if ($skipped) $message .= ", $skipped ohne gültige Management-IP übersprungen";
+                $message .= '.';
+                $_SESSION['rack_check_notice'] = [
+                    'rack' => $rack, 'success' => !$failures && !$skipped,
+                    'message' => $message,
+                    'failures' => array_slice($failures, 0, 20),
+                    'registered' => array_slice($registered, 0, 40),
+                    'registered_count' => count($registered),
+                ];
+            } finally {
+                flock($lock, LOCK_UN);
+                fclose($lock);
             }
         }
-        // Ein aktiver Check zur Zeit, damit nicht mehrere Anfragen dieselben Geräte parallel belasten.
-        $lock = fopen(dirname(__DIR__) . '/storage/rack_check.lock', 'c');
-        if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
-            throw new RuntimeException('Es läuft bereits ein Rack-Check. Bitte danach erneut starten.');
-        }
-        try {
-            set_time_limit(130);
-            // Unbekannte IPs ohne Telnet-Dienst nicht erst mit Netmiko abfragen.
-            // Vorhandene Rack-Geräte werden auch bei Nichterreichbarkeit geprüft.
-            [$primary, $retries, $scanResponsive] = rackFilterDiscoveryPlans($primary, $retries, $scanOnlyIps);
-            $results = $primary ? runRackPlans($defaults, $primary, $retries) : [];
-            // Ergebnisse noch unter dem Rack-Check-Lock speichern, damit ein
-            // zeitgleicher Check keine neueren Befunde überschreiben kann.
-            [$counts, $failures, $registered, $withoutUnit] = saveRackCheckResults(
-                $db, $devices, $primary, $retries, $results, $rack, $scanOnlyIps
-            );
-        } finally {
-            flock($lock, LOCK_UN);
-            fclose($lock);
-        }
-        $ok = $counts['ok'] ?? 0;
-        $total = array_sum($counts);
-        $message = "Rack $rack: $ok von $total Geräten erfolgreich geprüft";
-        if ($scanSize) {
-            $message .= "; IP-Scan: $scanSize Adressen, $scanResponsive bisher unbekannte IPs mit offenem Telnet-Port";
-            $message .= ', ' . count($registered) . ' neue Geräte im Rack registriert';
-            if ($withoutUnit) $message .= " ($withoutUnit ohne freie HE)";
-        }
-        if ($skipped) $message .= ", $skipped ohne gültige Management-IP übersprungen";
-        $message .= '.';
-        $_SESSION['rack_check_notice'] = [
-            'rack' => $rack, 'success' => !$failures && !$skipped,
-            'message' => $message,
-            'failures' => array_slice($failures, 0, 20),
-            'registered' => array_slice($registered, 0, 40),
-            'registered_count' => count($registered),
-        ];
     } catch (Throwable $error) {
         $_SESSION['rack_check_notice'] = [
             'rack' => $rack, 'success' => false, 'message' => $error instanceof JsonException
                 ? 'Ungültige JSON-Konfiguration: ' . $error->getMessage() : $error->getMessage(),
-            'failures' => [],
+            'failures' => [], 'registered' => [], 'registered_count' => 0,
         ];
     }
     redirect('index.php#rack-' . $rack);
@@ -865,7 +958,7 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
     <meta name="theme-color" content="#09090b">
     <meta name="description" content="NetLab Guardian Netzwerkgeräteinventar">
     <title>NetLab Guardian — Netzwerk im Blick</title>
-    <link rel="stylesheet" href="style.css?v=20261102-2">
+    <link rel="stylesheet" href="style.css?v=20261103-lock">
 </head>
 
 <body>
@@ -954,7 +1047,8 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                                         <input type="hidden" name="csrf" value="<?= h(csrf()) ?>">
                                         <input type="hidden" name="rack" value="<?= $rack ?>">
                                         <input type="hidden" name="mode" value="default">
-                                        <button type="submit" class="rack-run-button" title="Rack-Geräte und das zugehörige IP-Netz prüfen">▶ Prüfen + IP-Scan</button>
+                                        <button type="submit" name="action" value="check" class="rack-run-button" title="Nur vorhandene, nicht ausgeschlossene Rack-Geräte prüfen">▶ Prüfen</button>
+                                        <button type="submit" name="action" value="scan" class="rack-run-button rack-run-scan" title="IP-Bereiche scannen, neue Geräte registrieren und alle zulässigen Ziele prüfen">⌕ IP-Scan + Prüfen</button>
                                     </form>
                                 </div>
                             <?php endif; ?>
@@ -968,11 +1062,12 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                                                 <input type="hidden" name="rack" value="<?= $rack ?>">
                                                 <input type="hidden" name="mode" value="custom">
                                                 <label for="rack-json-<?= $rack ?>">JSON-Konfiguration für Rack <?= $rack ?></label>
-                                                <p>Temporäre JSON-Einstellungen: <code>discover.ranges</code> definiert die zu scannenden IPv4-Bereiche und <code>discover.exclude</code> nimmt IPs nur vom Range-Scan aus (explizite <code>devices</code> bleiben aktiv). Das Rack-Netz 10.78.<?= $rack ?>.1–254 ist voreingestellt. Unter <code>devices</code> bleiben vorhandene Geräte separat konfigurierbar. Unbelegte IPs erzeugen keine Fehler. Erreichbare, vom Python-Skript erkannte neue Geräte werden im Rack registriert, vorläufig einer freien HE zugewiesen und können anschließend im Adminbereich bearbeitet werden. Falls das Rack voll ist, werden sie ohne HE registriert. Bereits vorhandene Geräte bleiben in ihrem Rack; gemeldete Fehler werden gespeichert. Die Passwörter bleiben mit <code>[aus Datenbank]</code> verborgen und werden beim Start serverseitig ergänzt. Du kannst Username oder Passwort im Editor nur für diesen einen Prüflauf ändern oder neue Einträge ohne id hinzufügen. Die JSON-Einstellungen werden nicht gespeichert; Inventar und Prüfergebnisse werden in SQLite gespeichert. Gespeicherte Zugangsdaten lassen sich unter <a href="credentials.php">Credentials verwalten</a> bearbeiten und einzelnen Geräten zuordnen. Ohne Gerätezuordnung werden alle globalen Credentials verwendet; bei einer Zuordnung nur diese. Hinweis: Das unveränderte Python-Skript verwendet derzeit immer Port 23.</p>
+                                                <p>„Nur Geräte prüfen“ verwendet ausschließlich die vorhandenen Rack-Geräte aus <code>devices</code> – ohne Netzwerk-Scan. „IP-Scan + Prüfen“ verwendet zusätzlich <code>discover.ranges</code> und <code>discover.exclude</code> (nur für unbekannte Scan-Ziele). Dauerhaft ausgeschlossene Geräte werden bei beiden Aktionen immer übersprungen, auch wenn sie explizit unter <code>devices</code> stehen. Das Rack-Netz 10.78.<?= $rack ?>.1–254 ist voreingestellt. Unter <code>devices</code> bleiben vorhandene Geräte separat konfigurierbar. Unbelegte IPs erzeugen keine Fehler. Erreichbare, vom Python-Skript erkannte neue Geräte werden im Rack registriert, vorläufig einer freien HE zugewiesen und können anschließend im Adminbereich bearbeitet werden. Falls das Rack voll ist, werden sie ohne HE registriert. Bereits vorhandene Geräte bleiben in ihrem Rack; gemeldete Fehler werden gespeichert. Die Passwörter bleiben mit <code>[aus Datenbank]</code> verborgen und werden beim Start serverseitig ergänzt. Du kannst Username oder Passwort im Editor nur für diesen einen Prüflauf ändern oder neue Einträge ohne id hinzufügen. Die JSON-Einstellungen werden nicht gespeichert; Inventar und Prüfergebnisse werden in SQLite gespeichert. Gespeicherte Zugangsdaten lassen sich unter <a href="credentials.php">Credentials verwalten</a> bearbeiten und einzelnen Geräten zuordnen. Ohne Gerätezuordnung werden alle globalen Credentials verwendet; bei einer Zuordnung nur diese. Hinweis: Das unveränderte Python-Skript verwendet derzeit immer Port 23.</p>
                                                 <textarea id="rack-json-<?= $rack ?>" name="settings_json" rows="13" maxlength="64000" spellcheck="false" required><?= h($editorJson) ?></textarea>
                                                 <div class="rack-settings-buttons">
                                                     <button type="reset" class="rack-reset-button">Zurücksetzen</button>
-                                                    <button type="submit" class="rack-run-button rack-run-custom">Mit Einstellungen prüfen</button>
+                                                    <button type="submit" name="action" value="check" class="rack-run-button rack-run-custom">Nur Geräte prüfen</button>
+                                                    <button type="submit" name="action" value="scan" class="rack-run-button rack-run-scan rack-run-custom">IP-Scan + Prüfen</button>
                                                 </div>
                                             </form>
                                         </div>
@@ -1003,25 +1098,32 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                                     </div>
                                 <?php else:
                                     $d = $rackSlots[$unit];
-                                    $isRouter = strtolower($d['device_type']) === 'router'; ?>
-                                    <a class="device <?= h($d['status']) ?> <?= $isRouter ? 'router' : '' ?> <?= trim((string) $d['notes']) !== '' ? 'has-note' : '' ?>"
-                                        href="device.php?id=<?= (int) $d['id'] ?>"
-                                        aria-label="<?= h($d['hostname'] ?: 'Gerät ' . $d['id']) ?>, <?= h(statusLabel($d['status'])) ?>, Details öffnen"><span
-                                            class="unit"><?= str_pad((string) $unit, 2, '0', STR_PAD_LEFT) ?></span><span
-                                            class="device-name"><?= h($d['hostname'] ?: 'Gerät ' . $d['id']) ?></span><?php if (trim((string) $d['notes']) !== ''): ?><span
-                                                class="note-marker" title="Notiz vorhanden">N</span><?php endif; ?><span class="ports"
-                                            aria-hidden="true"><?php for ($p = 0; $p < ($isRouter ? 4 : 16); ++$p): ?><i
-                                                    class="port"></i><?php endfor; ?></span></a>
+                                    $isRouter = strtolower($d['device_type']) === 'router';
+                                    $isExcluded = (int) ($d['check_excluded'] ?? 0) === 1; ?>
+                                    <div class="device <?= h($d['status']) ?> <?= $isRouter ? 'router' : '' ?> <?= trim((string) $d['notes']) !== '' ? 'has-note' : '' ?> <?= $isExcluded ? 'check-excluded' : '' ?>">
+                                        <a class="device-row-link" href="device.php?id=<?= (int) $d['id'] ?>"
+                                            aria-label="<?= h($d['hostname'] ?: 'Gerät ' . $d['id']) ?>, <?= h(statusLabel($d['status'])) ?>, Details öffnen"></a>
+                                        <span class="unit"><?= str_pad((string) $unit, 2, '0', STR_PAD_LEFT) ?></span>
+                                        <span class="device-name"><?= h($d['hostname'] ?: 'Gerät ' . $d['id']) ?></span>
+                                        <?php rackLockControl($d, $rack); ?>
+                                        <?php if (trim((string) $d['notes']) !== ''): ?>
+                                            <a class="note-marker" href="device.php?id=<?= (int) $d['id'] ?>" title="Notiz vorhanden">N</a>
+                                        <?php endif; ?>
+                                        <span class="ports" aria-hidden="true"><?php for ($p = 0; $p < ($isRouter ? 4 : 16); ++$p): ?><i class="port"></i><?php endfor; ?></span>
+                                    </div>
                                 <?php endif; ?>
                             <?php endfor; ?>
                         </div>
                         <?php if ($rackUnpositioned): ?>
                             <div class="rack-footer">
-                                <span><b>Ohne HE zugeordnet:</b>
+                                <div class="unpositioned-devices"><b>Ohne HE zugeordnet:</b>
                                     <?php foreach ($rackUnpositioned as $unpositioned): ?>
-                                        <a href="<?= isAdmin() ? 'admin.php?edit=' . (int) $unpositioned['id'] . '#editor' : 'device.php?id=' . (int) $unpositioned['id'] ?>"><?= h($unpositioned['hostname'] ?: $unpositioned['management_ip']) ?></a>
+                                        <div class="unpositioned-device">
+                                            <a href="<?= isAdmin() ? 'admin.php?edit=' . (int) $unpositioned['id'] . '#editor' : 'device.php?id=' . (int) $unpositioned['id'] ?>"><?= h($unpositioned['hostname'] ?: $unpositioned['management_ip']) ?></a>
+                                            <?php rackLockControl($unpositioned, $rack); ?>
+                                        </div>
                                     <?php endforeach; ?>
-                                </span>
+                                </div>
                                 <span>HE im Adminbereich zuweisen</span>
                             </div>
                         <?php endif; ?>
@@ -1085,7 +1187,7 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                                     <td><?= h($d['management_ip'] ?: '—') ?></td>
                                     <td><?= h($d['rack_position'] ?: 'Ohne Rack') ?></td>
                                     <td><span
-                                            class="pill <?= pillClass($d['status']) ?>"><?= h(statusLabel($d['status'])) ?></span>
+                                            class="pill <?= pillClass($d['status']) ?>"><?= h(statusLabel($d['status'])) ?></span><?= (int) ($d['check_excluded'] ?? 0) === 1 ? ' <span class="pill neutral-pill">Ausgeschlossen</span>' : '' ?>
                                     </td>
                                     <td><a class="text-button" href="device.php?id=<?= (int) $d['id'] ?>">Details ↗</a></td>
                                 </tr><?php endforeach; ?>

@@ -15,6 +15,7 @@ CREATE TABLE device (
     first_seen TEXT NOT NULL DEFAULT (datetime('now')),
     removed_at TEXT,
     last_checked_at TEXT,
+    check_excluded INTEGER NOT NULL DEFAULT 0 CHECK (check_excluded IN (0, 1)),
     CHECK (removed_at IS NULL OR removed_at >= first_seen)
 );
 

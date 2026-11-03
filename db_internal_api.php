@@ -20,6 +20,8 @@ final class DBInternalAPI
         if ($new) {
             @chmod($path, 0600);
             $this->init();
+        } else {
+            $this->migrateCheckExclusion();
         }
     }
 
@@ -33,6 +35,24 @@ final class DBInternalAPI
         }
 
         $this->db->exec($schema);
+    }
+
+    /** Ergänzt das Ausschlussfeld auch in bereits existierenden Inventardatenbanken. */
+    private function migrateCheckExclusion(): void
+    {
+        $fields = $this->db->query('PRAGMA table_info(device)')->fetchAll();
+        if (in_array('check_excluded', array_column($fields, 'name'), true)) {
+            return;
+        }
+        try {
+            $this->db->exec('ALTER TABLE device ADD COLUMN check_excluded INTEGER NOT NULL DEFAULT 0 CHECK (check_excluded IN (0, 1))');
+        } catch (PDOException $error) {
+            // Ein paralleler PHP-Request kann die Migration bereits ausgeführt haben.
+            $fields = $this->db->query('PRAGMA table_info(device)')->fetchAll();
+            if (!in_array('check_excluded', array_column($fields, 'name'), true)) {
+                throw $error;
+            }
+        }
     }
 
     /** Liefert Spalten und Eigenschaften (name, type, notnull, dflt_value, pk). */
@@ -157,6 +177,32 @@ final class DBInternalAPI
     {
         $stmt = $this->db->prepare('DELETE FROM device_credential WHERE device_id = ? AND credential_id = ?');
         $stmt->execute([$deviceId, $credentialId]);
+    }
+
+    /** Ersetzt die gerätespezifische Credential-Auswahl atomar.
+     *  Leere Auswahl = kein Override; bei Checks gelten dann alle globalen Credentials.
+     */
+    public function setDeviceCredentials(int $deviceId, array $credentialIds): void
+    {
+        if ($deviceId < 1 || count($credentialIds) > 10000) {
+            throw new InvalidArgumentException('Ungültige Geräte-Credential-Zuordnung.');
+        }
+        $this->db->beginTransaction();
+        try {
+            $delete = $this->db->prepare('DELETE FROM device_credential WHERE device_id = ?');
+            $delete->execute([$deviceId]);
+            $insert = $this->db->prepare('INSERT INTO device_credential (device_id, credential_id) VALUES (?, ?)');
+            foreach (array_unique($credentialIds) as $credentialId) {
+                if (!is_int($credentialId) || $credentialId < 1) {
+                    throw new InvalidArgumentException('Ungültige Credential-ID.');
+                }
+                $insert->execute([$deviceId, $credentialId]);
+            }
+            $this->db->commit();
+        } catch (Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
     }
 
     /** Interne Website-Anmeldung; niemals das Klartextfeld credential.pwd verwenden. */
