@@ -7,7 +7,7 @@ requireLogin();
 const RACK_DB_PASSWORD = '[aus Datenbank]';
 
 /** Editierbares JSON: globale Credentials sichtbar, DB-Passwörter als Platzhalter. */
-function rackEditableConfig(array $rackDevices, array $commands, array $credentialRows): array
+function rackEditableConfig(int $rack, array $rackDevices, array $commands, array $credentialRows): array
 {
     $ips = [];
     foreach ($rackDevices as $device) {
@@ -22,6 +22,12 @@ function rackEditableConfig(array $rackDevices, array $commands, array $credenti
             'username' => (string) $row['username'],
             'password' => RACK_DB_PASSWORD,
         ], $credentialRows),
+        // Ohne zusätzliche Konfiguration wird das zum Rack gehörende /24 geprüft.
+        // Diese Adressbereiche können vor jedem Lauf im JSON geändert werden.
+        'discover' => [
+            'ranges' => [['start' => "10.78.$rack.1", 'end' => "10.78.$rack.254"]],
+            'exclude' => [],
+        ],
         'defaults' => [
             'port' => 23,
             'device_type' => 'cisco_ios_telnet',
@@ -66,13 +72,74 @@ function validCheckOptions(mixed $options, bool $partial = false): array
 }
 
 /**
- * Erstellt ausschließlich für die ausgewählten Geräte dieses Racks Prüfpläne.
+ * Wandelt discover.ranges/exclude aus dem vorhandenen JSON-Format in IPv4-Ziele um.
+ * Die obere Grenze verhindert versehentliche riesige Netzwerkscans.
+ * Ausschlüsse gelten ausschließlich für den IP-Scan, nicht für explizite devices.
+ */
+function rackDiscoveryTargets(mixed $discover): array
+{
+    if ($discover === null) return [];
+    if (!is_array($discover) || array_diff(array_keys($discover), ['ranges', 'exclude']) ||
+        !isset($discover['ranges']) || !is_array($discover['ranges']) || !array_is_list($discover['ranges'])) {
+        throw new RuntimeException('discover benötigt ranges als Liste; exclude ist optional.');
+    }
+    $parseRanges = static function (mixed $ranges, string $field): array {
+        if (!is_array($ranges) || !array_is_list($ranges) || count($ranges) > 64) {
+            throw new RuntimeException("discover.$field muss eine Liste mit höchstens 64 Bereichen sein.");
+        }
+        $parsed = [];
+        foreach ($ranges as $range) {
+            if (!is_array($range) || count($range) !== 2 ||
+                array_diff(array_keys($range), ['start', 'end']) ||
+                !isset($range['start'], $range['end']) ||
+                !is_string($range['start']) || !is_string($range['end']) ||
+                !filter_var($range['start'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
+                !filter_var($range['end'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                throw new RuntimeException("discover.$field: Jeder Bereich benötigt start und end als gültige IPv4-Adressen.");
+            }
+            $start = (int) sprintf('%u', ip2long($range['start']));
+            $end = (int) sprintf('%u', ip2long($range['end']));
+            if ($end < $start) {
+                throw new RuntimeException("discover.$field: start darf nicht größer als end sein.");
+            }
+            $parsed[] = [$start, $end];
+        }
+        return $parsed;
+    };
+    $ranges = $parseRanges($discover['ranges'], 'ranges');
+    $excluded = $parseRanges($discover['exclude'] ?? [], 'exclude');
+    $targets = [];
+    foreach ($ranges as [$start, $end]) {
+        if ($end - $start + 1 > 2048) {
+            throw new RuntimeException('Ein einzelner IP-Bereich darf höchstens 2048 Adressen enthalten.');
+        }
+        for ($ip = $start; $ip <= $end; ++$ip) {
+            $ignored = false;
+            foreach ($excluded as [$excludeStart, $excludeEnd]) {
+                if ($ip >= $excludeStart && $ip <= $excludeEnd) {
+                    $ignored = true;
+                    break;
+                }
+            }
+            if (!$ignored) {
+                $targets[long2ip($ip)] = true;
+                if (count($targets) > 2048) {
+                    throw new RuntimeException('Der IP-Scan darf insgesamt höchstens 2048 Adressen umfassen.');
+                }
+            }
+        }
+    }
+    return $targets;
+}
+
+/**
+ * Erstellt Prüfpläne für Rack-Geräte und zusätzliche IPs aus discover.ranges.
  * Standardzugangsdaten stammen aus SQLite; im Browser erscheinen nur Platzhalter.
  * Das unveränderte Python-Config-Modul identifiziert Credentials am Benutzernamen.
  */
 function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settings): array
 {
-    if (!is_array($settings) || array_diff(array_keys($settings), ['credentials', 'defaults', 'devices']) ||
+    if (!is_array($settings) || array_diff(array_keys($settings), ['credentials', 'defaults', 'devices', 'discover']) ||
         !isset($settings['defaults'], $settings['devices']) || !is_array($settings['devices'])) {
         throw new RuntimeException('Das JSON benötigt defaults und devices; credentials ist optional.');
     }
@@ -135,15 +202,43 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
         throw new RuntimeException('Keine Zugangsdaten ausgewählt. Bitte credentials in SQLite oder im JSON ergänzen.');
     }
 
+    $scanTargets = rackDiscoveryTargets($settings['discover'] ?? null);
+    // Auch ein Gerät in einem anderen Rack zählt als bereits inventarisiert,
+    // falls ein Administrator dessen IP-Bereich explizit zum Scan hinzufügt.
+    $knownGlobally = [];
+    foreach ($db->all('device', ['removed_at' => null], 10000) as $device) {
+        $ip = trim((string) $device['management_ip']);
+        if (filter_var($ip, FILTER_VALIDATE_IP)) {
+            if (isset($knownGlobally[$ip]) && (int) $knownGlobally[$ip]['id'] !== (int) $device['id']) {
+                throw new RuntimeException('Mehrere aktive Geräte haben dieselbe Management-IP: ' . $ip);
+            }
+            $knownGlobally[$ip] = $device;
+        }
+    }
+    $scanOnlyIps = [];
+    $targetOptions = [];
+    foreach ($settings['devices'] as $ip => $options) {
+        if (!is_string($ip) || !isset($known[$ip])) {
+            throw new RuntimeException('Unter devices dürfen nur Management-IPs des gewählten Racks stehen.');
+        }
+        $targetOptions[$ip] = validCheckOptions($options, true);
+    }
+    // Im Bereich erkannte bekannte Geräte immer prüfen, auch wenn sie nicht
+    // ausdrücklich unter devices stehen. Neue IPs werden nach einem gültigen
+    // Erkennungsergebnis im gewählten Rack inventarisiert.
+    foreach ($scanTargets as $ip => $_) {
+        if (!isset($targetOptions[$ip])) {
+            $targetOptions[$ip] = [];
+        }
+        if (!isset($knownGlobally[$ip])) {
+            $scanOnlyIps[$ip] = true;
+        }
+    }
+
     $primary = [];
     $retries = [];
     $skipped = 0;
-    foreach ($settings['devices'] as $ip => $options) {
-        if (!is_string($ip) || !isset($known[$ip])) {
-            throw new RuntimeException('Es dürfen nur Management-IPs des gewählten Racks geprüft werden.');
-        }
-        $options = validCheckOptions($options, true);
-
+    foreach ($targetOptions as $ip => $options) {
         // Alle globalen Credentials werden für jedes Gerät versucht.
         // Doppelte Benutzernamen mit anderen Passwörtern laufen als Folgeversuche.
         $selected = [];
@@ -158,10 +253,75 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
         }
         $primary[] = ['ip' => $ip, 'options' => $options, 'credentials' => $selected];
     }
-    if (!$primary) {
-        throw new RuntimeException('Keine prüfbaren Geräte gefunden. Bitte gültige Management-IPs hinterlegen.');
+    if (!$primary && !$scanTargets) {
+        throw new RuntimeException('Keine Prüfziele gefunden. Bitte Management-IPs oder discover.ranges hinterlegen.');
     }
-    return [$defaults, $primary, $retries, $skipped];
+    return [$defaults, $primary, $retries, $skipped, $scanOnlyIps, count($scanTargets)];
+}
+
+/**
+ * Schneller TCP-Vortest für noch nicht inventarisierte IPs aus discover.
+ * Das bestehende Python-Programm verbindet sich ausschließlich über Port 23.
+ * 96 parallele, nicht blockierende Verbindungen verhindern, dass ein /24 mit
+ * überwiegend unbelegten Adressen minutenlange Netmiko-Timeouts verursacht.
+ * Bekannte Geräte werden NICHT vorgefiltert: Dort sind Verbindungsfehler relevant.
+ * Ein negativer Porttest bedeutet nur: derzeit kein erreichbarer Telnet-Dienst.
+ */
+function rackProbeUnknownIps(array $ips): array
+{
+    $reachable = [];
+    foreach (array_chunk(array_keys($ips), 96) as $batch) {
+        $pending = [];
+        foreach ($batch as $ip) {
+            $connection = @stream_socket_client(
+                'tcp://' . $ip . ':23', $errorNo, $errorText, 0.5,
+                STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT
+            );
+            if (is_resource($connection)) {
+                stream_set_blocking($connection, false);
+                $pending[(int) $connection] = ['ip' => $ip, 'stream' => $connection];
+            }
+        }
+        $deadline = microtime(true) + 0.5;
+        while ($pending && microtime(true) < $deadline) {
+            $write = array_column($pending, 'stream');
+            $read = [];
+            $except = $write;
+            $remainingUs = max(0, (int) (($deadline - microtime(true)) * 1_000_000));
+            $ready = @stream_select($read, $write, $except, 0, $remainingUs);
+            if ($ready === false) break;
+            if ($ready === 0) continue;
+            foreach (array_merge($write, $except) as $stream) {
+                $key = (int) $stream;
+                if (!isset($pending[$key])) continue;
+                // Ein schreibbereiter Socket kann auch ECONNREFUSED melden.
+                if (function_exists('socket_import_stream')) {
+                    $socket = @socket_import_stream($stream);
+                    $connected = $socket !== false && @socket_get_option($socket, SOL_SOCKET, SO_ERROR) === 0;
+                } else {
+                    $connected = @stream_socket_get_name($stream, true) !== false;
+                }
+                if ($connected) $reachable[$pending[$key]['ip']] = true;
+                fclose($stream);
+                unset($pending[$key]);
+            }
+        }
+        foreach ($pending as $item) fclose($item['stream']);
+    }
+    return $reachable;
+}
+
+/** Entfernt aus dem Python-Check nur nicht erreichbare, noch unbekannte Scan-IPs. */
+function rackFilterDiscoveryPlans(array $primary, array $retries, array $scanOnlyIps): array
+{
+    if (!$scanOnlyIps) return [$primary, $retries, 0];
+    $reachable = rackProbeUnknownIps($scanOnlyIps);
+    $primary = array_values(array_filter($primary, static fn(array $plan): bool =>
+        !isset($scanOnlyIps[$plan['ip']]) || isset($reachable[$plan['ip']])));
+    foreach ($scanOnlyIps as $ip => $_) {
+        if (!isset($reachable[$ip])) unset($retries[$ip]);
+    }
+    return [$primary, $retries, count($reachable)];
 }
 
 /**
@@ -223,7 +383,9 @@ function runRackPlans(array $defaults, array $primary, array $retries): array
         foreach ($retries as $ip => $options) {
             if (isset($options[$round])) {
                 $hasMore = true;
-                if (($results[$ip]['status'] ?? null) === 'authentication_failed') {
+                $status = $results[$ip]['status'] ?? null;
+                if (is_array($status)) $status = $status[0] ?? null;
+                if ($status === 'authentication_failed') {
                     $retryPlans[] = $options[$round];
                 }
             }
@@ -401,18 +563,44 @@ function rackCheckOutcome(mixed $response, array $passwords): array
     return ['error', 'Python-Check: Fehler', $detail !== '' ? $detail : 'Python hat einen Fehler gemeldet.'];
 }
 
-/**
- * Ordnet die Ergebnisse den Rack-Geräten zu und speichert ausschließlich offene
- * Python-Fehler in issue. Identische Fehler bleiben ein Eintrag; behobene werden
- * geschlossen. Andere (manuell erfasste) Störungen bleiben unangetastet.
- */
-function saveRackCheckResults(DBInternalAPI $db, array $rackDevices, array $plans, array $retries, array $results): array
+/** Liefert auch für automatisch erfasste Rack-Geräte ohne HE die Rack-Nummer. */
+function rackScanPosition(?string $position): array
 {
+    [$rack, $unit] = rackAndUnit($position);
+    if ($rack !== null) return [$rack, $unit];
+    if (preg_match('/^Rack ([1-3]) \/ Ohne HE$/D', trim((string) $position), $match)) {
+        return [(int) $match[1], null];
+    }
+    return [null, null];
+}
+
+/**
+ * Speichert Check-Fehler der vorhandenen Geräte und legt durch den IP-Scan
+ * neu erkannte Geräte automatisch im ausgewählten Rack an. Eine IP wird nur
+ * nach einer tatsächlichen Antwort des Python-Checks übernommen (ok,
+ * authentication_failed oder error), niemals bei unreachable/fehlender Antwort.
+ * Bereits inventarisierte IPs werden weder verschoben noch doppelt angelegt.
+ * Die HE ist mangels physischer Erkennung zunächst eine vorläufige Zuordnung.
+ */
+function saveRackCheckResults(
+    DBInternalAPI $db,
+    array $knownDevices,
+    array $plans,
+    array $retries,
+    array $results,
+    int $rack,
+    array $scanOnlyIps
+): array {
     $devicesByIp = [];
-    foreach ($rackDevices as $device) {
+    $occupiedUnits = [];
+    foreach ($knownDevices as $device) {
         $ip = trim((string) $device['management_ip']);
         if (filter_var($ip, FILTER_VALIDATE_IP)) {
             $devicesByIp[$ip] = $device;
+        }
+        [$deviceRack, $unit] = rackScanPosition($device['rack_position'] ?? null);
+        if ($deviceRack === $rack && $unit !== null) {
+            $occupiedUnits[$unit] = true;
         }
     }
 
@@ -435,11 +623,54 @@ function saveRackCheckResults(DBInternalAPI $db, array $rackDevices, array $plan
 
     $counts = [];
     $failures = [];
+    $registered = [];
+    $withoutUnit = 0;
     foreach ($plans as $plan) {
         $ip = $plan['ip'];
-        $device = $devicesByIp[$ip]; // Wurde in rackExecutionPlans validiert.
-        $deviceId = (int) $device['id'];
         [$status, $type, $description] = rackCheckOutcome($results[$ip] ?? null, $passwords);
+        $device = $devicesByIp[$ip] ?? null;
+        if ($device === null) {
+            // Nur tatsächlich erreichte IP-Scan-Ziele registrieren. Die Verbindung
+            // zu Port 23 wurde zuvor geprüft; Python muss einen Status liefern.
+            // Inaktive, unbelegte oder nicht antwortende IPs bleiben ignoriert.
+            if (!isset($scanOnlyIps[$ip]) ||
+                !is_array($results[$ip] ?? null) ||
+                !in_array($status, ['ok', 'authentication_failed', 'error'], true)) {
+                continue;
+            }
+            $rawStatus = $results[$ip]['status'] ?? null;
+            if (is_array($rawStatus) && array_is_list($rawStatus)) {
+                $rawStatus = $rawStatus[0] ?? null;
+            }
+            if (!in_array($rawStatus, ['ok', 'authentication_failed', 'error'], true)) {
+                continue;
+            }
+
+            $unit = null;
+            for ($candidate = 1; $candidate <= 30; ++$candidate) {
+                if (!isset($occupiedUnits[$candidate])) {
+                    $unit = $candidate;
+                    $occupiedUnits[$candidate] = true;
+                    break;
+                }
+            }
+            $position = $unit === null ? "Rack $rack / Ohne HE" : "Rack $rack / HE $unit";
+            if ($unit === null) ++$withoutUnit;
+            $hostname = 'Scan-' . str_replace('.', '-', $ip);
+            $deviceId = (int) $db->insert('device', [
+                'hostname' => $hostname,
+                'device_type' => 'Unbekannt',
+                'management_ip' => $ip,
+                'rack_position' => $position,
+                'notes' => $unit === null
+                    ? 'Automatisch per IP-Scan erkannt. Keine freie HE; Position und Gerätetyp bitte manuell zuweisen.'
+                    : 'Automatisch per IP-Scan erkannt. HE vorläufig zugeordnet; Position und Gerätetyp bitte prüfen.',
+            ]);
+            $device = ['id' => $deviceId, 'hostname' => $hostname, 'management_ip' => $ip];
+            $devicesByIp[$ip] = $device;
+            $registered[] = ['id' => $deviceId, 'ip' => $ip, 'position' => $position];
+        }
+        $deviceId = (int) $device['id'];
         $counts[$status] = ($counts[$status] ?? 0) + 1;
 
         $existing = array_values(array_filter(
@@ -472,10 +703,10 @@ function saveRackCheckResults(DBInternalAPI $db, array $rackDevices, array $plan
         }
         $db->update('device', $deviceId, ['last_checked_at' => gmdate('Y-m-d H:i:s')]);
     }
-    return [$counts, $failures];
+    return [$counts, $failures, $registered, $withoutUnit];
 }
 
-$devices = $db->activeDevices();
+$devices = $db->all('device', ['removed_at' => null], 10000);
 $issues = $db->openIssues();
 // Befehle nur bei angemeldeten Admins für die Check-UI laden.
 $checkCredentialRows = isAdmin() ? $db->all('credential', [], 10000) : [];
@@ -496,9 +727,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     $mode = (string) ($_POST['mode'] ?? '');
     try {
-        $rackDevices = array_values(array_filter($devices, static fn(array $device): bool => rackAndUnit($device['rack_position'])[0] === $rack));
+        $rackDevices = array_values(array_filter($devices, static fn(array $device): bool => rackScanPosition($device['rack_position'])[0] === $rack));
         if ($mode === 'default') {
-            $settings = rackEditableConfig($rackDevices, $checkCommands, $checkCredentialRows);
+            $settings = rackEditableConfig($rack, $rackDevices, $checkCommands, $checkCredentialRows);
             $settings['devices'] = (array) $settings['devices'];
             foreach ($settings['devices'] as &$options) $options = [];
             unset($options);
@@ -511,7 +742,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             throw new RuntimeException('Unbekannte Prüfaktion.');
         }
-        [$defaults, $primary, $retries, $skipped] = rackExecutionPlans($db, $rackDevices, $settings);
+        [$defaults, $primary, $retries, $skipped, $scanOnlyIps, $scanSize] = rackExecutionPlans($db, $rackDevices, $settings);
         foreach ($rackDevices as $device) {
             if (!filter_var(trim((string) $device['management_ip']), FILTER_VALIDATE_IP)) {
                 ++$skipped;
@@ -523,24 +754,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new RuntimeException('Es läuft bereits ein Rack-Check. Bitte danach erneut starten.');
         }
         try {
-            set_time_limit(110);
-            $results = runRackPlans($defaults, $primary, $retries);
+            set_time_limit(130);
+            // Unbekannte IPs ohne Telnet-Dienst nicht erst mit Netmiko abfragen.
+            // Vorhandene Rack-Geräte werden auch bei Nichterreichbarkeit geprüft.
+            [$primary, $retries, $scanResponsive] = rackFilterDiscoveryPlans($primary, $retries, $scanOnlyIps);
+            $results = $primary ? runRackPlans($defaults, $primary, $retries) : [];
             // Ergebnisse noch unter dem Rack-Check-Lock speichern, damit ein
             // zeitgleicher Check keine neueren Befunde überschreiben kann.
-            [$counts, $failures] = saveRackCheckResults($db, $rackDevices, $primary, $retries, $results);
+            [$counts, $failures, $registered, $withoutUnit] = saveRackCheckResults(
+                $db, $devices, $primary, $retries, $results, $rack, $scanOnlyIps
+            );
         } finally {
             flock($lock, LOCK_UN);
             fclose($lock);
         }
         $ok = $counts['ok'] ?? 0;
-        $total = count($primary);
+        $total = array_sum($counts);
         $message = "Rack $rack: $ok von $total Geräten erfolgreich geprüft";
+        if ($scanSize) {
+            $message .= "; IP-Scan: $scanSize Adressen, $scanResponsive bisher unbekannte IPs mit offenem Telnet-Port";
+            $message .= ', ' . count($registered) . ' neue Geräte im Rack registriert';
+            if ($withoutUnit) $message .= " ($withoutUnit ohne freie HE)";
+        }
         if ($skipped) $message .= ", $skipped ohne gültige Management-IP übersprungen";
         $message .= '.';
         $_SESSION['rack_check_notice'] = [
             'rack' => $rack, 'success' => !$failures && !$skipped,
             'message' => $message,
             'failures' => array_slice($failures, 0, 20),
+            'registered' => array_slice($registered, 0, 40),
+            'registered_count' => count($registered),
         ];
     } catch (Throwable $error) {
         $_SESSION['rack_check_notice'] = [
@@ -552,7 +795,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     redirect('index.php#rack-' . $rack);
 }
 foreach ($devices as &$device) {
-    [$device['rack'], $device['unit']] = rackAndUnit($device['rack_position']);
+    [$device['rack'], $device['unit']] = rackScanPosition($device['rack_position']);
     $device['status'] = statusFor((int) $device['id'], $issues, $device['last_checked_at']);
 }
 unset($device);
@@ -653,12 +896,18 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                     $rackStatuses = array_column($rackDevices, 'status');
                     $rackStatus = in_array('critical', $rackStatuses, true) ? 'critical' : (in_array('warning', $rackStatuses, true) ? 'warning' : (in_array('unknown', $rackStatuses, true) ? 'unknown' : 'checked'));
                     $rackSlots = [];
-                    foreach ($rackDevices as $d)
-                        $rackSlots[$d['unit']] = $d;
+                    $rackUnpositioned = [];
+                    foreach ($rackDevices as $d) {
+                        if ($d['unit'] === null) {
+                            $rackUnpositioned[] = $d;
+                        } else {
+                            $rackSlots[$d['unit']] = $d;
+                        }
+                    }
                     $switches = count(array_filter($rackDevices, static fn($d) => strtolower($d['device_type']) === 'switch'));
                     $routers = count(array_filter($rackDevices, static fn($d) => strtolower($d['device_type']) === 'router'));
                     $editorJson = isAdmin()
-                        ? json_encode(rackEditableConfig($rackDevices, $checkCommands, $checkCredentialRows), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE)
+                        ? json_encode(rackEditableConfig($rack, $rackDevices, $checkCommands, $checkCredentialRows), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE)
                         : ''; 
                     ?>
                     <article class="rack-card" id="rack-<?= $rack ?>">
@@ -673,7 +922,7 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                                         <input type="hidden" name="csrf" value="<?= h(csrf()) ?>">
                                         <input type="hidden" name="rack" value="<?= $rack ?>">
                                         <input type="hidden" name="mode" value="default">
-                                        <button type="submit" class="rack-run-button" title="Rack mit Datenbank-Standardwerten prüfen">▶ Prüfen</button>
+                                        <button type="submit" class="rack-run-button" title="Rack-Geräte und das zugehörige IP-Netz prüfen">▶ Prüfen + IP-Scan</button>
                                     </form>
                                 </div>
                             <?php endif; ?>
@@ -687,7 +936,7 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                                                 <input type="hidden" name="rack" value="<?= $rack ?>">
                                                 <input type="hidden" name="mode" value="custom">
                                                 <label for="rack-json-<?= $rack ?>">JSON-Konfiguration für Rack <?= $rack ?></label>
-                                                <p>Temporäre JSON-Einstellungen: Defaults, Geräte und globale Credentials. Die Passwörter bleiben mit <code>[aus Datenbank]</code> verborgen und werden beim Start serverseitig ergänzt. Du kannst Username oder Passwort im Editor nur für diesen einen Prüflauf ändern oder neue Einträge ohne id hinzufügen. Die JSON-Einstellungen werden nicht gespeichert; Prüfergebnisse und Fehlermeldungen werden den Geräten in SQLite zugeordnet. Die Credentials gelten immer für alle Geräte dieses Racks. Hinweis: Das unveränderte Python-Skript verwendet derzeit immer Port 23.</p>
+                                                <p>Temporäre JSON-Einstellungen: <code>discover.ranges</code> definiert die zu scannenden IPv4-Bereiche und <code>discover.exclude</code> nimmt IPs nur vom Range-Scan aus (explizite <code>devices</code> bleiben aktiv). Das Rack-Netz 10.78.<?= $rack ?>.1–254 ist voreingestellt. Unter <code>devices</code> bleiben vorhandene Geräte separat konfigurierbar. Unbelegte IPs erzeugen keine Fehler. Erreichbare, vom Python-Skript erkannte neue Geräte werden im Rack registriert, vorläufig einer freien HE zugewiesen und können anschließend im Adminbereich bearbeitet werden. Falls das Rack voll ist, werden sie ohne HE registriert. Bereits vorhandene Geräte bleiben in ihrem Rack; gemeldete Fehler werden gespeichert. Die Passwörter bleiben mit <code>[aus Datenbank]</code> verborgen und werden beim Start serverseitig ergänzt. Du kannst Username oder Passwort im Editor nur für diesen einen Prüflauf ändern oder neue Einträge ohne id hinzufügen. Die JSON-Einstellungen werden nicht gespeichert; Inventar und Prüfergebnisse werden in SQLite gespeichert. Die Credentials gelten für alle geprüften Geräte. Hinweis: Das unveränderte Python-Skript verwendet derzeit immer Port 23.</p>
                                                 <textarea id="rack-json-<?= $rack ?>" name="settings_json" rows="13" maxlength="64000" spellcheck="false" required><?= h($editorJson) ?></textarea>
                                                 <div class="rack-settings-buttons">
                                                     <button type="reset" class="rack-reset-button">Zurücksetzen</button>
@@ -702,6 +951,15 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                                 <strong><?= h($checkNotice['message']) ?></strong>
                                 <?php if ($checkNotice['failures']): ?>
                                     <p><?= h(implode(' · ', $checkNotice['failures'])) ?></p>
+                                <?php endif; ?>
+                                <?php if (!empty($checkNotice['registered'])): ?>
+                                    <p>Neu im Rack registriert (<?= (int) $checkNotice['registered_count'] ?>):
+                                        <?php foreach ($checkNotice['registered'] as $newDevice): ?>
+                                            <a href="device.php?id=<?= (int) $newDevice['id'] ?>"><?= h($newDevice['ip']) ?></a>
+                                            (<?= h($newDevice['position']) ?>)
+                                        <?php endforeach; ?>
+                                        <?= $checkNotice['registered_count'] > count($checkNotice['registered']) ? ' …' : '' ?>
+                                    </p>
                                 <?php endif; ?>
                             </div>
                         <?php endif; ?>
@@ -725,6 +983,16 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                                 <?php endif; ?>
                             <?php endfor; ?>
                         </div>
+                        <?php if ($rackUnpositioned): ?>
+                            <div class="rack-footer">
+                                <span><b>Ohne HE zugeordnet:</b>
+                                    <?php foreach ($rackUnpositioned as $unpositioned): ?>
+                                        <a href="<?= isAdmin() ? 'admin.php?edit=' . (int) $unpositioned['id'] . '#editor' : 'device.php?id=' . (int) $unpositioned['id'] ?>"><?= h($unpositioned['hostname'] ?: $unpositioned['management_ip']) ?></a>
+                                    <?php endforeach; ?>
+                                </span>
+                                <span>HE im Adminbereich zuweisen</span>
+                            </div>
+                        <?php endif; ?>
                         <div class="rack-footer"><span><b><?= count($rackDevices) ?> Geräte</b> / <?= $switches ?> Switches
                                 / <?= $routers ?> Router</span><span><?= count($rackSlots) ?> / 30 HE</span></div>
                     </article>
