@@ -2560,3 +2560,47 @@ th {
     .rack-settings-buttons { flex-wrap: wrap; }
     .rack-run-custom { flex: 1 1 150px; }
 }
+
+/* Incidents: klare Status-/Verlaufstabelle statt einzelner Warnkarten. */
+.incident-heading { align-items: flex-end; gap: 18px; }
+.incident-heading h2 { margin: 0; font-size: 22px; }
+.incident-description { color: var(--muted); font-size: 12px; margin: 8px 0 0; line-height: 1.5; }
+.incident-filters { display: flex; flex-wrap: wrap; gap: 5px; background: #151519; padding: 4px; border: 1px solid var(--line); border-radius: 7px; }
+.incident-filter { display: inline-flex; gap: 9px; align-items: center; padding: 8px 13px; font-size: 12px; color: #aaaab5; text-decoration: none; border-radius: 4px; }
+.incident-filter.active { background: #29292f; color: #f4f4f6; }
+.incident-filter:hover { color: #fff; }
+.incident-filter span { font-variant-numeric: tabular-nums; color: #9494a1; }
+.incident-scroll { border: 1px solid #303037; border-radius: 7px; background: #141418; }
+.incident-table { min-width: 990px; white-space: normal; }
+.incident-table th { padding: 13px 12px; font-size: 11px; font-weight: 600; text-transform: none; letter-spacing: 0; white-space: nowrap; background: #202025; color: #a8a8b4; }
+.incident-table td { font-size: 12px; padding: 15px 12px; line-height: 1.5; vertical-align: top; color: #c4c4cd; border-bottom: 1px solid #29292f; }
+.incident-table tbody tr:last-child td { border-bottom: 0; }
+.incident-table tbody tr:hover { background: #1c1c21; }
+.incident-table td:nth-child(3) { font-family: inherit; }
+.incident-status { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-size: 12px; }
+.incident-status.open { color: #e6aa72; }
+.incident-status.resolved { color: #89c3a1; }
+.incident-status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; }
+.incident-device { min-width: 132px; }
+.incident-device strong, .incident-device small { display: block; }
+.incident-device strong { color: #e7e7eb; font-weight: 600; }
+.incident-device small { margin-top: 3px; color: #91919d; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.incident-command { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #bcbcc8; font-size: 11px; overflow-wrap: anywhere; }
+.incident-message { min-width: 250px; width: 35%; overflow-wrap: anywhere; }
+.incident-message strong { color: #eeeef0; font-weight: 600; font-size: 12px; }
+.incident-message span { display: block; margin-top: 3px; color: #a7a7b4; font-size: 12px; }
+.incident-date { color: #aaaab5; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.incident-link a { color: #d4d4dd; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.incident-link a:hover { color: white; }
+.incident-empty { padding: 28px !important; text-align: center; color: #a7a7b4 !important; }
+.incident-timezone { margin: 10px 0 0; color: #858592; font-size: 11px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+@media (max-width: 800px) {
+    .incident-heading { align-items: flex-start; }
+    .incident-filters { width: 100%; }
+    .incident-table { min-width: 1000px; }
+}
+
+/* Eine Fehlermeldung pro Zeile statt eines langen Scan-Fehlertextes. */
+.rack-check-errors { margin: 10px 0 0; padding-left: 20px; }
+.rack-check-errors li { margin: 5px 0; line-height: 1.45; overflow-wrap: anywhere; }

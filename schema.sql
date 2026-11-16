@@ -24,7 +24,9 @@ CREATE TABLE issue (
     device_id INTEGER NOT NULL,
     type TEXT NOT NULL,
     description TEXT NOT NULL,
+    source_key TEXT,
     detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen_at TEXT,
     resolved_at TEXT,
     FOREIGN KEY (device_id) REFERENCES device(id) ON DELETE RESTRICT,
     CHECK (resolved_at IS NULL OR resolved_at >= detected_at)
@@ -64,3 +66,6 @@ CREATE INDEX idx_issue_device_id ON issue(device_id);
 CREATE INDEX idx_issue_open ON issue(resolved_at);
 CREATE INDEX idx_device_credential_credential_id ON device_credential(credential_id);
 CREATE INDEX idx_device_rack ON device(rack_position);
+
+CREATE UNIQUE INDEX idx_issue_open_source_key ON issue(device_id, source_key)
+    WHERE source_key IS NOT NULL AND resolved_at IS NULL;

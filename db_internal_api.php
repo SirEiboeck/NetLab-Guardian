@@ -21,7 +21,7 @@ final class DBInternalAPI
             @chmod($path, 0600);
             $this->init();
         } else {
-            $this->migrateCheckExclusion();
+            $this->migrateCheckSchema();
         }
     }
 
@@ -37,22 +37,41 @@ final class DBInternalAPI
         $this->db->exec($schema);
     }
 
-    /** Ergänzt das Ausschlussfeld auch in bereits existierenden Inventardatenbanken. */
-    private function migrateCheckExclusion(): void
+    /** Ergänzt neue Geräte-/Issue-Felder in bestehenden Inventaren automatisch. */
+    private function migrateCheckSchema(): void
     {
-        $fields = $this->db->query('PRAGMA table_info(device)')->fetchAll();
-        if (in_array('check_excluded', array_column($fields, 'name'), true)) {
-            return;
-        }
-        try {
-            $this->db->exec('ALTER TABLE device ADD COLUMN check_excluded INTEGER NOT NULL DEFAULT 0 CHECK (check_excluded IN (0, 1))');
-        } catch (PDOException $error) {
-            // Ein paralleler PHP-Request kann die Migration bereits ausgeführt haben.
-            $fields = $this->db->query('PRAGMA table_info(device)')->fetchAll();
-            if (!in_array('check_excluded', array_column($fields, 'name'), true)) {
-                throw $error;
+        $addedLastSeen = false;
+        foreach ([
+            ['device', 'check_excluded', 'INTEGER NOT NULL DEFAULT 0 CHECK (check_excluded IN (0, 1))'],
+            ['issue', 'source_key', 'TEXT'],
+            ['issue', 'last_seen_at', 'TEXT'],
+        ] as [$table, $column, $definition]) {
+            $fields = $this->db->query("PRAGMA table_info($table)")->fetchAll();
+            if (in_array($column, array_column($fields, 'name'), true)) {
+                continue;
+            }
+            try {
+                $this->db->exec("ALTER TABLE $table ADD COLUMN $column $definition");
+                if ($table === 'issue' && $column === 'last_seen_at') {
+                    $addedLastSeen = true;
+                }
+            } catch (PDOException $error) {
+                // Andere PHP-Requests können die Migration bereits durchgeführt haben.
+                $fields = $this->db->query("PRAGMA table_info($table)")->fetchAll();
+                if (!in_array($column, array_column($fields, 'name'), true)) {
+                    throw $error;
+                }
             }
         }
+        // Nur beim Upgrade schreiben – normale Seitenaufrufe bleiben lesend.
+        if ($addedLastSeen) {
+            $this->db->exec('UPDATE issue SET last_seen_at = detected_at WHERE last_seen_at IS NULL');
+        }
+        // Pro Gerät darf ein bestimmter automatischer Fehler nur einmal offen sein.
+        // Manuelle Issues besitzen keinen source_key und sind davon unberührt.
+        $this->db->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_issue_open_source_key
+            ON issue(device_id, source_key)
+            WHERE source_key IS NOT NULL AND resolved_at IS NULL');
     }
 
     /** Liefert Spalten und Eigenschaften (name, type, notnull, dflt_value, pk). */
@@ -158,6 +177,161 @@ final class DBInternalAPI
         $stmt = $this->db->prepare("UPDATE issue SET resolved_at = datetime('now') WHERE id = ? AND resolved_at IS NULL");
         $stmt->execute([$id]);
         return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Synchronisiert nur automatisch erzeugte Python-Incidents eines Geräts.
+     *
+     * - Gleiches (Gerät, source_key) bleibt ein und derselbe offene Incident.
+     * - Ein wieder sichtbarer Fehler aktualisiert nur Text und last_seen_at.
+     * - Ein fehlender Fehler wird nur für erfolgreich ausgewertete Befehle gelöst.
+     * - Timeout, Authentifizierungsfehler und kaputte Python-Antworten dürfen
+     *   bisherige Diagnose-Incidents nicht fälschlich als behoben markieren.
+     * - Manuell erfasste Incidents werden niemals automatisch verändert.
+     *
+     * Alle Änderungen eines Geräts sind eine SQLite-Transaktion.
+     * $desired: [source_key => ['type' => ..., 'description' => ...]]
+     * $outcome stammt aus rackCheckOutcome() und ist bereits validiert.
+     */
+    public function syncPythonIssues(int $deviceId, array $desired, array $outcome): void
+    {
+        if ($deviceId < 1) {
+            throw new InvalidArgumentException('Ungültige Geräte-ID.');
+        }
+        foreach ($desired as $key => $fields) {
+            if (!is_string($key) || !str_starts_with($key, 'python|') ||
+                !is_array($fields) || !is_string($fields['type'] ?? null) ||
+                !is_string($fields['description'] ?? null)) {
+                throw new InvalidArgumentException('Ungültige Python-Incident-Daten.');
+            }
+        }
+
+        $valid = ($outcome['valid_response'] ?? false) === true;
+        $structured = ($outcome['structured'] ?? false) === true;
+        $evaluated = array_fill_keys($outcome['evaluated'] ?? [], true);
+        $failed = [];
+        $cliErrorCodes = ['access_denied', 'cli_error', 'invalid_output', 'unsupported_command', 'execution_failed'];
+        $hasCommandResult = false;
+        foreach ($outcome['issues'] ?? [] as $current) {
+            if (!is_array($current) || !isset($current['command'], $current['code'])) {
+                continue;
+            }
+            $command = $current['command'];
+            $code = $current['code'];
+            if ($command !== '_transport' && $command !== '_system') {
+                $hasCommandResult = true;
+            }
+            if (in_array($code, $cliErrorCodes, true)) {
+                $failed[$command] = true;
+            }
+        }
+
+        $this->db->beginTransaction();
+        try {
+            $select = $this->db->prepare('SELECT * FROM issue WHERE device_id = ? AND resolved_at IS NULL');
+            $select->execute([$deviceId]);
+            $existing = $select->fetchAll();
+            $existingByKey = [];
+            $resolve = $this->db->prepare("UPDATE issue SET resolved_at = datetime('now') WHERE id = ? AND resolved_at IS NULL");
+            foreach ($existing as $old) {
+                $id = (int) $old['id'];
+                $key = $old['source_key'];
+                if ($key === null) {
+                    // Einmaliger Übergang von alten Python-Sammelmeldungen.
+                    if ($valid && $structured && $evaluated &&
+                        str_starts_with((string) $old['type'], 'Python-Check: ')) {
+                        $resolve->execute([$id]);
+                    }
+                    continue;
+                }
+                if (!str_starts_with((string) $key, 'python|')) {
+                    continue;
+                }
+                if (isset($desired[$key])) {
+                    $existingByKey[$key] = $old;
+                    continue;
+                }
+                if (!$valid) {
+                    continue;
+                }
+                $parts = explode('|', $key, 3);
+                if (count($parts) !== 3) {
+                    continue;
+                }
+                $command = rawurldecode($parts[1]);
+                $code = rawurldecode($parts[2]);
+                $mayResolve = false;
+                if ($command === '_transport') {
+                    // Sobald eine neue valide Antwort vorliegt, ist der alte
+                    // Verbindungsstatus nicht mehr aktuell.
+                    $mayResolve = true;
+                } elseif ($command === '_system') {
+                    // Ein Systemfehler ist durch einen auswertbaren Check oder
+                    // eine konkrete CLI-Meldung ersetzt, nicht durch Timeout.
+                    $mayResolve = $structured && ($evaluated || $hasCommandResult);
+                } elseif (isset($evaluated[$command])) {
+                    $mayResolve = true;
+                } elseif (isset($failed[$command]) && in_array($code, $cliErrorCodes, true)) {
+                    // CLI-Fehler wird durch einen neuen CLI-Fehler abgelöst,
+                    // nicht jedoch ein früherer Hardwarefehler.
+                    $mayResolve = true;
+                }
+                if ($mayResolve) {
+                    $resolve->execute([$id]);
+                }
+            }
+
+            $update = $this->db->prepare("UPDATE issue
+                SET type = ?, description = ?, last_seen_at = datetime('now')
+                WHERE id = ? AND resolved_at IS NULL");
+            $insert = $this->db->prepare("INSERT INTO issue
+                (device_id, source_key, type, description, last_seen_at)
+                VALUES (?, ?, ?, ?, datetime('now'))");
+            foreach ($desired as $key => $fields) {
+                if (isset($existingByKey[$key])) {
+                    $update->execute([$fields['type'], $fields['description'], (int) $existingByKey[$key]['id']]);
+                } else {
+                    $insert->execute([$deviceId, $key, $fields['type'], $fields['description']]);
+                }
+            }
+            $checked = $this->db->prepare("UPDATE device SET last_checked_at = datetime('now') WHERE id = ?");
+            $checked->execute([$deviceId]);
+            $this->db->commit();
+        } catch (Throwable $error) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $error;
+        }
+    }
+
+    /** Incidents inklusive Historie; mit Gerätedaten für die Tabellenansicht. */
+    public function incidentOverview(string $filter = 'open', int $limit = 200): array
+    {
+        if (!in_array($filter, ['open', 'resolved', 'all'], true)) {
+            throw new InvalidArgumentException('Ungültiger Incident-Filter.');
+        }
+        $where = match ($filter) {
+            'open' => ' WHERE i.resolved_at IS NULL',
+            'resolved' => ' WHERE i.resolved_at IS NOT NULL',
+            default => '',
+        };
+        $limit = max(1, min($limit, 500));
+        return $this->db->query('SELECT i.*, d.hostname AS device_name, d.management_ip AS device_ip
+            FROM issue i JOIN device d ON d.id = i.device_id' . $where . '
+            ORDER BY COALESCE(i.resolved_at, i.last_seen_at, i.detected_at) DESC, i.id DESC
+            LIMIT ' . $limit)->fetchAll();
+    }
+
+    public function incidentCounts(): array
+    {
+        $row = $this->db->query('SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END) AS open,
+            SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END) AS resolved
+            FROM issue')->fetch();
+        return ['all' => (int) $row['total'], 'open' => (int) $row['open'],
+            'resolved' => (int) $row['resolved']];
     }
 
     public function deviceCredentials(int $deviceId): array

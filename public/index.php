@@ -542,6 +542,23 @@ function executeRackCheck(array $config): array
         }
         $exitCode = proc_close($process);
         $finished = true;
+        if (trim($output[1]) !== '') {
+            // Auch bei Exit-Code 0 können einzelne Geräte/Befehle scheitern.
+            // Tracebacks ausschließlich im Webserver-Log, nie im HTML anzeigen.
+            $safeLog = $output[1];
+            $secrets = [];
+            foreach ($config['credentials'] ?? [] as $row) {
+                if (is_array($row) && is_string($row['password'] ?? null) && $row['password'] !== '') {
+                    $secrets[$row['password']] = true;
+                }
+            }
+            $passwords = array_keys($secrets);
+            usort($passwords, static fn(string $a, string $b): int => strlen($b) <=> strlen($a));
+            foreach ($passwords as $secret) {
+                $safeLog = str_replace($secret, '[Passwort verborgen]', $safeLog);
+            }
+            error_log('NetLab-Check Python-Diagnose: ' . substr($safeLog, 0, 9000));
+        }
         if ($exitCode !== 0) {
             // Stderr kann Passwörter enthalten und darf weder ins HTML noch ungefiltert ins Log.
             $hint = rackPythonFailureHint($output[1]);
@@ -564,51 +581,166 @@ function executeRackCheck(array $config): array
     }
 }
 
+/** Begrenzt und maskiert extern gelieferte Texte vor ihrer Speicherung. */
+function rackIssueText(string $text, array $passwords, int $limit = 1600): string
+{
+    foreach ($passwords as $password) {
+        if ($password !== '') {
+            $text = str_replace($password, '[Passwort verborgen]', $text);
+        }
+    }
+    $text = preg_replace('/[\x00-\x1f\x7f]+/u', ' ', $text) ?? 'Ungültige Diagnosemeldung';
+    // mbstring ist nicht auf jedem PHP-Server installiert.
+    return trim(function_exists('mb_substr')
+        ? mb_substr($text, 0, $limit, 'UTF-8')
+        : substr($text, 0, $limit));
+}
+
 /**
- * Die Python-Ausgabe enthält pro Management-IP ein Ergebnis mit einem Status.
- * Nur Fehlertexte übernehmen, niemals die ebenfalls zurückgelieferten Credentials
- * oder die (möglicherweise umfangreichen) Command-Ausgaben.
+ * Normiert einen Python-Check in einzelne Geräte-Issues.
+ * Die neue Python-Schnittstelle liefert status, issues und evaluated_commands.
+ * evaluated_commands sagt PHP exakt, für welche Befehle frühere Fehler
+ * tatsächlich als behoben gelten dürfen. Fehlende/ungültige Antworten
+ * schließen aus Sicherheitsgründen keine bestehenden Diagnose-Issues.
  */
 function rackCheckOutcome(mixed $response, array $passwords): array
 {
+    $issue = static function (string $command, string $code, string $title, string $details): array {
+        return ['command' => $command, 'code' => $code, 'message' => $title, 'details' => $details];
+    };
+    $invalid = static function (string $code, string $details) use ($issue, $passwords): array {
+        return [
+            'status' => 'error',
+            'issues' => [$issue('_transport', $code, 'Python-Prüfung fehlgeschlagen', rackIssueText($details, $passwords))],
+            'evaluated' => [],
+            'structured' => false,
+            'valid_response' => false,
+        ];
+    };
     if (!is_array($response)) {
-        return ['error', 'Python-Check: Fehler', 'Für dieses Gerät wurde kein gültiges Prüfergebnis zurückgegeben.'];
+        return $invalid('missing_result', 'Für dieses Gerät wurde kein gültiges Prüfergebnis zurückgegeben.');
     }
     $status = $response['status'] ?? null;
     $statusDetail = null;
-    // Optional bereits für einen späteren Status der Form ["ok", "..."] vorbereitet.
     if (is_array($status) && array_is_list($status)) {
         $statusDetail = $status[1] ?? null;
         $status = $status[0] ?? null;
     }
-    if ($status === 'ok') {
-        return ['ok', '', ''];
+    if (in_array($status, ['unreachable', 'authentication_failed'], true)) {
+        $title = $status === 'unreachable' ? 'Gerät nicht erreichbar' : 'Anmeldung fehlgeschlagen';
+        $detail = $status === 'unreachable'
+            ? 'Das Gerät war beim Netzwerkcheck nicht erreichbar.'
+            : 'Die Anmeldung mit den verwendeten Zugangsdaten ist fehlgeschlagen.';
+        return [
+            'status' => $status,
+            'issues' => [$issue('_transport', $status, $title, $detail)],
+            'evaluated' => [],
+            'structured' => false,
+            'valid_response' => true,
+        ];
     }
-    if ($status === 'unreachable') {
-        return ['unreachable', 'Python-Check: Nicht erreichbar', 'Das Gerät war beim Netzwerkcheck nicht erreichbar.'];
-    }
-    if ($status === 'authentication_failed') {
-        return ['authentication_failed', 'Python-Check: Anmeldung fehlgeschlagen', 'Die Anmeldung mit den verwendeten Zugangsdaten ist fehlgeschlagen.'];
+    if (!in_array($status, ['ok', 'error'], true)) {
+        return $invalid('unknown_status', 'Python hat keinen bekannten Prüfstatus geliefert.');
     }
 
-    if ($status === 'error') {
-        $detail = is_string($response['error'] ?? null)
-            ? $response['error']
-            : (is_string($statusDetail) ? $statusDetail : 'Python hat einen Fehler gemeldet.');
-    } else {
-        $detail = is_string($status) && $status !== ''
-            ? 'Unbekannter Prüfstatus: ' . $status
-            : 'Python hat keinen gültigen Prüfstatus geliefert.';
+    // Eine strukturierte Rückgabe ist atomar gültig oder wird nicht zur
+    // automatischen Auflösung vorhandener Issues verwendet.
+    if (array_key_exists('issues', $response) || array_key_exists('evaluated_commands', $response)) {
+        $rawIssues = $response['issues'] ?? null;
+        $rawEvaluated = $response['evaluated_commands'] ?? null;
+        if (!is_array($rawIssues) || !array_is_list($rawIssues) || count($rawIssues) > 2000 ||
+            !is_array($rawEvaluated) || !array_is_list($rawEvaluated) || count($rawEvaluated) > 100) {
+            return $invalid('invalid_issues', 'Python hat eine unvollständige Diagnoseliste geliefert.');
+        }
+        $evaluated = [];
+        foreach ($rawEvaluated as $command) {
+            if (!is_string($command) || strlen($command) > 256 || trim($command) === '') {
+                return $invalid('invalid_issues', 'Ungültiger Befehl in evaluated_commands.');
+            }
+            $normalized = strtolower(implode(' ', preg_split('/\s+/', trim($command))));
+            $evaluated[$normalized] = true;
+        }
+        $issues = [];
+        foreach ($rawIssues as $row) {
+            if (!is_array($row) || !isset($row['code'], $row['command'], $row['message']) ||
+                !is_string($row['code']) || !is_string($row['command']) || !is_string($row['message']) ||
+                !preg_match('/^[a-z][a-z0-9_.-]{0,100}$/D', $row['code']) ||
+                strlen($row['command']) > 256 || trim($row['command']) === '' ||
+                trim($row['message']) === '' || !is_string($row['details'] ?? '')) {
+                return $invalid('invalid_issues', 'Python hat einen ungültigen Diagnoseeintrag geliefert.');
+            }
+            $command = strtolower(implode(' ', preg_split('/\s+/', trim($row['command']))));
+            $issues[] = $issue(
+                $command,
+                $row['code'],
+                rackIssueText($row['message'], $passwords, 180),
+                rackIssueText($row['details'] ?? '', $passwords)
+            );
+        }
+        if (($status === 'ok' && $issues) || ($status === 'error' && !$issues)) {
+            return $invalid('invalid_issues', 'Status und Diagnoseliste widersprechen sich.');
+        }
+        return [
+            'status' => $status,
+            'issues' => $issues,
+            'evaluated' => array_keys($evaluated),
+            'structured' => true,
+            'valid_response' => true,
+        ];
     }
-    // Ein Netmiko-Fehlertext kann Zugangsdaten enthalten. Vor Speicherung maskieren.
-    foreach ($passwords as $password) {
-        if ($password !== '') {
-            $detail = str_replace($password, '[Passwort verborgen]', $detail);
+
+    // Übergang für alte device_checker.py-Versionen: eine gemeinsame Meldung.
+    // Andere, separat gespeicherte Diagnosen ohne vollständige Prüfliste
+    // niemals versehentlich schließen.
+    if ($status === 'ok') {
+        return ['status' => 'ok', 'issues' => [], 'evaluated' => [],
+            'structured' => false, 'valid_response' => true];
+    }
+    $details = '';
+    foreach ([$response['output'] ?? null, $statusDetail, $response['error'] ?? null] as $candidate) {
+        if (is_string($candidate) && trim($candidate) !== '') {
+            $details = $candidate;
+            break;
         }
     }
-    $detail = preg_replace('/[\x00-\x1f\x7f]+/u', ' ', $detail) ?? 'Unlesbare Python-Fehlermeldung.';
-    $detail = trim(substr($detail, 0, 1800));
-    return ['error', 'Python-Check: Fehler', $detail !== '' ? $detail : 'Python hat einen Fehler gemeldet.'];
+    return [
+        'status' => 'error',
+        'issues' => [$issue('_transport', 'legacy_error', 'Allgemeiner Python-Fehler',
+            rackIssueText($details ?: 'Python hat einen Fehler gemeldet.', $passwords))],
+        'evaluated' => [],
+        'structured' => false,
+        'valid_response' => true,
+    ];
+}
+
+/** Eine stabile, eindeutige Kennung pro Befehl und Fehler. */
+function rackIssueSourceKey(array $issue): string
+{
+    return 'python|' . rawurlencode($issue['command']) . '|' . rawurlencode($issue['code']);
+}
+
+/** Anzeigename und Befehl aus dem stabilen Python-Schlüssel lesen. */
+function rackIncidentCommand(?string $sourceKey): string
+{
+    if (!$sourceKey || !str_starts_with($sourceKey, 'python|')) {
+        return 'Manuell';
+    }
+    $parts = explode('|', $sourceKey, 3);
+    if (count($parts) !== 3) return 'Python';
+    $command = rawurldecode($parts[1]);
+    return str_starts_with($command, '_') ? 'Systemprüfung' : $command;
+}
+
+/** UTC-Zeiten aus SQLite für die lokale Anzeige (Österreich) formatieren. */
+function rackIncidentDate(?string $value): string
+{
+    if (!$value) return '—';
+    try {
+        $date = new DateTimeImmutable($value, new DateTimeZone('UTC'));
+        return $date->setTimezone(new DateTimeZone('Europe/Vienna'))->format('d.m.Y H:i');
+    } catch (Exception) {
+        return '—';
+    }
 }
 
 /** Liefert auch für automatisch erfasste Rack-Geräte ohne HE die Rack-Nummer. */
@@ -675,13 +807,15 @@ function saveRackCheckResults(
     $withoutUnit = 0;
     foreach ($plans as $plan) {
         $ip = $plan['ip'];
-        [$status, $type, $description] = rackCheckOutcome($results[$ip] ?? null, $passwords);
+        $outcome = rackCheckOutcome($results[$ip] ?? null, $passwords);
+        $status = $outcome['status'];
         $device = $devicesByIp[$ip] ?? null;
         if ($device === null) {
             // Nur tatsächlich erreichte IP-Scan-Ziele registrieren. Die Verbindung
             // zu Port 23 wurde zuvor geprüft; Python muss einen Status liefern.
             // Inaktive, unbelegte oder nicht antwortende IPs bleiben ignoriert.
             if (!isset($scanOnlyIps[$ip]) ||
+                !$outcome['valid_response'] ||
                 !is_array($results[$ip] ?? null) ||
                 !in_array($status, ['ok', 'authentication_failed', 'error'], true)) {
                 continue;
@@ -721,35 +855,30 @@ function saveRackCheckResults(
         $deviceId = (int) $device['id'];
         $counts[$status] = ($counts[$status] ?? 0) + 1;
 
-        $existing = array_values(array_filter(
-            $db->all('issue', ['device_id' => $deviceId, 'resolved_at' => null], 10000),
-            static fn(array $issue): bool => str_starts_with((string) $issue['type'], 'Python-Check: ')
-        ));
-        $matchingIssueId = null;
-        foreach ($existing as $issue) {
-            if ($status !== 'ok' && $issue['type'] === $type && $matchingIssueId === null) {
-                $matchingIssueId = (int) $issue['id'];
-                if ($issue['description'] !== $description) {
-                    $db->update('issue', $matchingIssueId, ['description' => $description]);
-                }
-            } else {
-                $db->resolveIssue((int) $issue['id']);
+        // Alle aktuellen Diagnosen genau einmal pro Gerät und stabiler Kennung.
+        $desired = [];
+        foreach ($outcome['issues'] as $item) {
+            $key = rackIssueSourceKey($item);
+            $command = $item['command'];
+            $description = $item['details'] !== '' ? $item['details'] : $item['message'];
+            if ($command !== '_transport' && $command !== '_system') {
+                $description = $command . ': ' . $description;
             }
+            $desired[$key] = [
+                'type' => 'Python-Check: ' . $item['message'],
+                'description' => function_exists('mb_substr')
+                    ? mb_substr($description, 0, 1800, 'UTF-8')
+                    : substr($description, 0, 1800),
+            ];
         }
-        if ($status !== 'ok') {
-            if ($matchingIssueId === null) {
-                $db->insert('issue', [
-                    'device_id' => $deviceId,
-                    'type' => $type,
-                    'description' => $description,
-                ]);
-            }
+        // Die DB übernimmt Duplikat-Erkennung, Aktualisierung und sichere
+        // Auflösung atomar. Andere als Python-Incidents bleiben unverändert.
+        $db->syncPythonIssues($deviceId, $desired, $outcome);
+        foreach ($desired as $fields) {
             $deviceName = trim((string) $device['hostname']);
-            $issueLabel = substr($type, strlen('Python-Check: '));
             $failures[] = ($deviceName !== '' ? $deviceName . ' (' . $ip . ')' : $ip)
-                . ': ' . $issueLabel . ' – ' . $description;
+                . ': ' . $fields['type'] . ' – ' . $fields['description'];
         }
-        $db->update('device', $deviceId, ['last_checked_at' => gmdate('Y-m-d H:i:s')]);
     }
     return [$counts, $failures, $registered, $withoutUnit];
 }
@@ -793,6 +922,12 @@ function rackLockControl(array $device, int $rack): void
 }
 
 $devices = $db->all('device', ['removed_at' => null], 10000);
+$incidentFilter = (string) ($_GET['incidents'] ?? 'open');
+if (!in_array($incidentFilter, ['open', 'resolved', 'all'], true)) {
+    $incidentFilter = 'open';
+}
+$incidentCounts = $db->incidentCounts();
+$incidents = $db->incidentOverview($incidentFilter, 200);
 $issues = $db->openIssues();
 // Befehle nur bei angemeldeten Admins für die Check-UI laden.
 $checkCredentialRows = isAdmin() ? $db->all('credential', [], 10000) : [];
@@ -850,6 +985,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             try {
                 $devices = $db->all('device', ['removed_at' => null], 10000);
+$incidentFilter = (string) ($_GET['incidents'] ?? 'open');
+if (!in_array($incidentFilter, ['open', 'resolved', 'all'], true)) {
+    $incidentFilter = 'open';
+}
+$incidentCounts = $db->incidentCounts();
+$incidents = $db->incidentOverview($incidentFilter, 200);
                 $rackDevices = array_values(array_filter($devices, static fn(array $device): bool => rackScanPosition($device['rack_position'])[0] === $rack));
                 $action = (string) ($_POST['action'] ?? '');
                 if (!in_array($action, ['check', 'scan'], true)) {
@@ -889,7 +1030,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
                 $ok = $counts['ok'] ?? 0;
                 $total = array_sum($counts);
-                $message = "Rack $rack: $ok von $total Geräten erfolgreich geprüft";
+                $message = "Rack $rack: $ok von $total Geräten ohne Auffälligkeiten";
                 if ($includeScan) {
                     $message .= "; IP-Scan: $scanSize Adressen, $scanResponsive bisher unbekannte IPs mit offenem Telnet-Port";
                     $message .= ', ' . count($registered) . ' neue Geräte im Rack registriert';
@@ -958,7 +1099,7 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
     <meta name="theme-color" content="#09090b">
     <meta name="description" content="NetLab Guardian Netzwerkgeräteinventar">
     <title>NetLab Guardian — Netzwerk im Blick</title>
-    <link rel="stylesheet" href="style.css?v=20261103-lock">
+    <link rel="stylesheet" href="style.css?v=20261116-incidents">
 </head>
 
 <body>
@@ -1062,7 +1203,7 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                                                 <input type="hidden" name="rack" value="<?= $rack ?>">
                                                 <input type="hidden" name="mode" value="custom">
                                                 <label for="rack-json-<?= $rack ?>">JSON-Konfiguration für Rack <?= $rack ?></label>
-                                                <p>„Nur Geräte prüfen“ verwendet ausschließlich die vorhandenen Rack-Geräte aus <code>devices</code> – ohne Netzwerk-Scan. „IP-Scan + Prüfen“ verwendet zusätzlich <code>discover.ranges</code> und <code>discover.exclude</code> (nur für unbekannte Scan-Ziele). Dauerhaft ausgeschlossene Geräte werden bei beiden Aktionen immer übersprungen, auch wenn sie explizit unter <code>devices</code> stehen. Das Rack-Netz 10.78.<?= $rack ?>.1–254 ist voreingestellt. Unter <code>devices</code> bleiben vorhandene Geräte separat konfigurierbar. Unbelegte IPs erzeugen keine Fehler. Erreichbare, vom Python-Skript erkannte neue Geräte werden im Rack registriert, vorläufig einer freien HE zugewiesen und können anschließend im Adminbereich bearbeitet werden. Falls das Rack voll ist, werden sie ohne HE registriert. Bereits vorhandene Geräte bleiben in ihrem Rack; gemeldete Fehler werden gespeichert. Die Passwörter bleiben mit <code>[aus Datenbank]</code> verborgen und werden beim Start serverseitig ergänzt. Du kannst Username oder Passwort im Editor nur für diesen einen Prüflauf ändern oder neue Einträge ohne id hinzufügen. Die JSON-Einstellungen werden nicht gespeichert; Inventar und Prüfergebnisse werden in SQLite gespeichert. Gespeicherte Zugangsdaten lassen sich unter <a href="credentials.php">Credentials verwalten</a> bearbeiten und einzelnen Geräten zuordnen. Ohne Gerätezuordnung werden alle globalen Credentials verwendet; bei einer Zuordnung nur diese. Hinweis: Das unveränderte Python-Skript verwendet derzeit immer Port 23.</p>
+                                                <p>„Nur Geräte prüfen“ verwendet ausschließlich die vorhandenen Rack-Geräte aus <code>devices</code> – ohne Netzwerk-Scan. „IP-Scan + Prüfen“ verwendet zusätzlich <code>discover.ranges</code> und <code>discover.exclude</code> (nur für unbekannte Scan-Ziele). Dauerhaft ausgeschlossene Geräte werden bei beiden Aktionen immer übersprungen, auch wenn sie explizit unter <code>devices</code> stehen. Das Rack-Netz 10.78.<?= $rack ?>.1–254 ist voreingestellt. Unter <code>devices</code> bleiben vorhandene Geräte separat konfigurierbar. Unbelegte IPs erzeugen keine Fehler. Erreichbare, vom Python-Skript erkannte neue Geräte werden im Rack registriert, vorläufig einer freien HE zugewiesen und können anschließend im Adminbereich bearbeitet werden. Falls das Rack voll ist, werden sie ohne HE registriert. Bereits vorhandene Geräte bleiben in ihrem Rack; gemeldete Fehler werden gespeichert. Die Passwörter bleiben mit <code>[aus Datenbank]</code> verborgen und werden beim Start serverseitig ergänzt. Du kannst Username oder Passwort im Editor nur für diesen einen Prüflauf ändern oder neue Einträge ohne id hinzufügen. Die JSON-Einstellungen werden nicht gespeichert; Inventar und Prüfergebnisse werden in SQLite gespeichert. Gespeicherte Zugangsdaten lassen sich unter <a href="credentials.php">Credentials verwalten</a> bearbeiten und einzelnen Geräten zuordnen. Ohne Gerätezuordnung werden alle globalen Credentials verwendet; bei einer Zuordnung nur diese. Der unter defaults.port bzw. devices[IP].port eingestellte Port wird für den Gerätezugriff verwendet.</p>
                                                 <textarea id="rack-json-<?= $rack ?>" name="settings_json" rows="13" maxlength="64000" spellcheck="false" required><?= h($editorJson) ?></textarea>
                                                 <div class="rack-settings-buttons">
                                                     <button type="reset" class="rack-reset-button">Zurücksetzen</button>
@@ -1077,7 +1218,11 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
                             <div class="rack-check-notice notice <?= $checkNotice['success'] ? 'success' : 'error' ?>" role="status">
                                 <strong><?= h($checkNotice['message']) ?></strong>
                                 <?php if ($checkNotice['failures']): ?>
-                                    <p><?= h(implode(' · ', $checkNotice['failures'])) ?></p>
+                                    <ul class="rack-check-errors">
+                                        <?php foreach ($checkNotice['failures'] as $failure): ?>
+                                            <li><?= h($failure) ?></li>
+                                        <?php endforeach; ?>
+                                    </ul>
                                 <?php endif; ?>
                                 <?php if (!empty($checkNotice['registered'])): ?>
                                     <p>Neu im Rack registriert (<?= (int) $checkNotice['registered_count'] ?>):
@@ -1136,24 +1281,75 @@ usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a
             </div>
             <div class="legend"><span>Geprüft</span><span>Warnung</span><span>Kritisch</span><span>Nicht
                     geprüft</span><span>19″ Racks · 30 HE · schematische Darstellung</span></div>
-            <section class="issues" id="issues">
-                <div class="section-top">
+            <section class="issues" id="issues" aria-labelledby="incidents-heading">
+                <div class="section-top incident-heading">
                     <div>
-                        <div class="eyebrow muted">AKTUELLE MELDUNGEN</div>
-                        <h2>Offene Probleme <span class="pill red-pill"><?= count($issues) ?></span></h2>
-                    </div><span class="subtle">Aus der SQLite-Tabelle issue</span>
+                        <h2 id="incidents-heading">Incidents</h2>
+                        <p class="incident-description">Erkannte Probleme und deren Verlauf. Die letzten 200 Einträge pro Ansicht.</p>
+                    </div>
+                    <nav class="incident-filters" aria-label="Incidents filtern">
+                        <?php foreach (['open' => 'Offen', 'resolved' => 'Gelöst', 'all' => 'Alle'] as $key => $label): ?>
+                            <a href="index.php?incidents=<?= h($key) ?>#issues"
+                               class="incident-filter <?= $incidentFilter === $key ? 'active' : '' ?>"
+                               <?= $incidentFilter === $key ? 'aria-current="page"' : '' ?>>
+                                <?= h($label) ?> <span><?= (int) $incidentCounts[$key] ?></span>
+                            </a>
+                        <?php endforeach; ?>
+                    </nav>
                 </div>
-                <?php foreach ($issues as $issue):
-                    $d = $deviceById[$issue['device_id']] ?? null; ?>
-                    <div class="issue-row"><span class="issue-icon <?= issueCritical($issue) ? '' : 'warn' ?>">!</span>
-                        <div class="issue-copy"><strong><?= h($issue['type']) ?></strong>
-                            <p><?= h($d['hostname'] ?? 'Gerät ' . $issue['device_id']) ?> — <?= h($issue['description']) ?>
-                            </p>
-                        </div><?php if ($d): ?><a class="text-button" href="device.php?id=<?= (int) $d['id'] ?>">Prüfen
-                                ↗</a><?php else: ?><span class="subtle">Gerät nicht aktiv</span><?php endif; ?>
-                    </div><?php endforeach; ?>
-                <?php if (!$issues): ?>
-                    <p class="subtle">Keine offenen Probleme erfasst.</p><?php endif; ?>
+                <div class="table-scroll incident-scroll">
+                    <table class="incident-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">Status</th>
+                                <th scope="col">Gerät</th>
+                                <th scope="col">Check</th>
+                                <th scope="col">Meldung</th>
+                                <th scope="col">Erkannt</th>
+                                <th scope="col">Zuletzt gesehen</th>
+                                <th scope="col">Gelöst</th>
+                                <th scope="col"><span class="visually-hidden">Gerät öffnen</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($incidents as $incident):
+                                $isOpen = $incident['resolved_at'] === null;
+                                $label = preg_replace('/^Python-Check:\s*/', '', (string) $incident['type']);
+                                $checkName = rackIncidentCommand($incident['source_key']);
+                                $detail = (string) $incident['description'];
+                                if ($checkName !== 'Manuell' && str_starts_with($detail, $checkName . ': ')) {
+                                    $detail = substr($detail, strlen($checkName) + 2);
+                                } ?>
+                                <tr>
+                                    <td><span class="incident-status <?= $isOpen ? 'open' : 'resolved' ?>">
+                                        <span class="incident-status-dot" aria-hidden="true"></span><?= $isOpen ? 'Offen' : 'Gelöst' ?>
+                                    </span></td>
+                                    <td class="incident-device">
+                                        <strong><?= h($incident['device_name'] ?: 'Gerät ' . $incident['device_id']) ?></strong>
+                                        <?php if ($incident['device_ip']): ?><small><?= h($incident['device_ip']) ?></small><?php endif; ?>
+                                    </td>
+                                    <td><span class="incident-command"><?= h($checkName) ?></span></td>
+                                    <td class="incident-message">
+                                        <strong><?= h($label) ?></strong>
+                                        <?php if (trim($detail) !== ''): ?>
+                                            <span><?= h($detail) ?></span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="incident-date"><?= h(rackIncidentDate($incident['detected_at'])) ?></td>
+                                    <td class="incident-date"><?= h(rackIncidentDate($incident['last_seen_at'] ?: $incident['detected_at'])) ?></td>
+                                    <td class="incident-date"><?= h(rackIncidentDate($incident['resolved_at'])) ?></td>
+                                    <td class="incident-link"><a href="device.php?id=<?= (int) $incident['device_id'] ?>" aria-label="Gerät <?= h($incident['device_name'] ?: $incident['device_id']) ?> öffnen">Ansehen</a></td>
+                                </tr>
+                            <?php endforeach; ?>
+                            <?php if (!$incidents): ?>
+                                <tr><td colspan="8" class="incident-empty">
+                                    <?= $incidentFilter === 'open' ? 'Derzeit sind keine Incidents offen.' : ($incidentFilter === 'resolved' ? 'Noch keine gelösten Incidents vorhanden.' : 'Keine Incidents vorhanden.') ?>
+                                </td></tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <p class="incident-timezone">Zeitangaben: Europe/Vienna · Incidents werden nur nach einer erfolgreich abgeschlossenen Prüfung automatisch geschlossen.</p>
             </section>
             <section class="inventory" id="inventory">
                 <div class="section-top">
