@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-// Ausschließlich über die Konsole auf dem Server ausführen.
+// CLI-only: Benutzeranlage und Passwortänderung; niemals über den Browser.
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
     exit;
@@ -15,17 +15,36 @@ if ($username === '' || !preg_match('/^[a-zA-Z0-9_.-]{3,40}$/', $username) || !i
     exit(1);
 }
 
-echo "Neues Passwort für {$username} ({$role}): ";
-if (function_exists('shell_exec') && DIRECTORY_SEPARATOR === '/')
-    @shell_exec('stty -echo');
-$password = rtrim((string) fgets(STDIN), "\r\n");
-if (function_exists('shell_exec') && DIRECTORY_SEPARATOR === '/')
-    @shell_exec('stty echo');
-echo "\n";
-if (strlen($password) < 5) {
-    fwrite(STDERR, "Mindestens 5 Zeichen erforderlich.\n");
+if (function_exists('stream_isatty') && !stream_isatty(STDIN)) {
+    fwrite(STDERR, "Passwort nur interaktiv über ein Terminal eingeben (nicht als Parameter).\n");
     exit(1);
 }
-$db = new DBInternalAPI();
-$db->setSiteUser($username, password_hash($password, PASSWORD_DEFAULT), $role);
-echo "Benutzer wurde angelegt/aktualisiert.\n";
+
+echo "Neues Passwort für {$username} ({$role}): ";
+$hideInput = DIRECTORY_SEPARATOR === '/' && function_exists('shell_exec')
+    && function_exists('stream_isatty') && stream_isatty(STDIN);
+if ($hideInput) {
+    @shell_exec('stty -echo 2>/dev/null');
+}
+try {
+    $password = fgets(STDIN);
+} finally {
+    if ($hideInput) {
+        @shell_exec('stty echo 2>/dev/null');
+    }
+    echo "\n";
+}
+if ($password === false || strlen(rtrim($password, "\r\n")) < 8) {
+    fwrite(STDERR, "Passwort muss mindestens 8 Zeichen haben.\n");
+    exit(1);
+}
+$password = rtrim($password, "\r\n");
+try {
+    $db = new DBInternalAPI();
+    $db->setSiteUser($username, password_hash($password, PASSWORD_DEFAULT), $role);
+    echo "Benutzer wurde angelegt/aktualisiert.\n";
+} catch (PDOException $error) {
+    fwrite(STDERR, "Datenbankfehler: " . $error->getMessage() . "\n"
+        . "Prüfe storage/inventory.sqlite und Rechte oder führe sudo ./install.sh aus.\n");
+    exit(1);
+}

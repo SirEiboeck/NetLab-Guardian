@@ -1,0 +1,3 @@
+# Python 3.10 oder neuer; enthält Paramiko und alle benötigten Netzwerk-Abhängigkeiten.
+# Bewusst festgelegt, damit der Installer reproduzierbar dieselbe Version verwendet.
+netmiko==4.8.0

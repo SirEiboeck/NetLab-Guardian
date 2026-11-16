@@ -1,10 +1,65 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/db_internal_api.php';
+/**
+ * Sicherer Start der Anwendung. Details gehen ausschließlich ins PHP-Fehlerlog,
+ * niemals ungefiltert an Besucher der Website.
+ */
+function netlabStartupFailure(string $message, ?Throwable $cause = null): never
+{
+    error_log('[NetLab Guardian] Start fehlgeschlagen: ' . $message . ($cause !== null ? ' | ' . (string) $cause : ''));
+    if (PHP_SAPI === 'cli') {
+        throw new RuntimeException($message, 0, $cause);
+    }
+    http_response_code(503);
+    header('Content-Type: text/html; charset=utf-8');
+    header('Cache-Control: no-store, private');
+    header('X-Content-Type-Options: nosniff');
+    $safe = htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    echo '<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+       . '<title>NetLab Guardian – Startproblem</title>'
+       . '<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#111923;color:#e7edf5;font:16px system-ui,sans-serif}'
+       . 'main{max-width:620px;margin:24px;padding:32px;border:1px solid #354354;border-radius:12px;background:#1b2531}'
+       . 'h1{font-size:24px;margin-top:0}p{line-height:1.6}small{color:#aebdce}</style>'
+       . '<main><h1>NetLab Guardian konnte nicht starten</h1><p>' . $safe . '</p>'
+       . '<small>Weitere technische Informationen stehen im PHP- bzw. Webserver-Fehlerlog.</small></main></html>';
+    exit;
+}
 
-// Datenbank liegt außerhalb von /public und ist nicht per URL abrufbar.
-$db = new DBInternalAPI();
+$requiredFiles = [
+    'db_internal_api.php',
+    'app/Support/ProjectPaths.php',
+    'app/Support/helpers.php',
+    'app/Database/db_internal_api.php',
+    'app/Checks/bootstrap.php',
+    'app/Checks/Configuration.php',
+    'app/Checks/Execution.php',
+    'app/Checks/IncidentResults.php',
+    'app/Views/dashboard.php',
+    'app/Controllers/dashboard.php',
+];
+foreach ($requiredFiles as $relativeFile) {
+    if (!is_file(__DIR__ . '/' . $relativeFile)) {
+        netlabStartupFailure('Benötigte Datei fehlt: ' . $relativeFile . '. Bitte die vollständige ZIP im Projektstamm entpacken und auf Groß-/Kleinschreibung achten.');
+    }
+}
+if (!extension_loaded('pdo_sqlite')) {
+    netlabStartupFailure('Die PHP-Erweiterung pdo_sqlite ist nicht aktiviert. Bitte die SQLite-Unterstützung der Webserver-PHP-Version aktivieren.');
+}
+if (!is_dir(__DIR__ . '/storage') || !is_writable(__DIR__ . '/storage')) {
+    netlabStartupFailure('Das Verzeichnis storage/ fehlt oder ist für den PHP-Webserverbenutzer nicht beschreibbar.');
+}
+$sqliteFile = __DIR__ . '/storage/inventory.sqlite';
+if (is_file($sqliteFile) && (!is_readable($sqliteFile) || !is_writable($sqliteFile))) {
+    netlabStartupFailure('Die SQLite-Datei storage/inventory.sqlite ist für PHP nicht les- oder beschreibbar. Den CLI-Installer sudo bash install.sh auf dem Server ausführen.');
+}
+
+try {
+    require_once __DIR__ . '/db_internal_api.php';
+    $db = new DBInternalAPI();
+} catch (Throwable $error) {
+    netlabStartupFailure('Die Datenbank konnte nicht geöffnet oder initialisiert werden. Bitte Dateiberechtigungen und PHP-Fehlerlog prüfen.', $error);
+}
 
 if (PHP_SAPI !== 'cli') {
     header('X-Content-Type-Options: nosniff');
@@ -20,101 +75,9 @@ if (PHP_SAPI !== 'cli') {
         'httponly' => true,
         'samesite' => 'Strict',
     ]);
-    session_start();
+    if (session_start() !== true) {
+        netlabStartupFailure('Die Anmeldungssitzung kann nicht gestartet werden. Bitte die PHP-Session-Konfiguration prüfen.');
+    }
 }
 
-function h(mixed $value): string
-{
-    return htmlspecialchars((string) ($value ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-}
-function csrf(): string
-{
-    if (!isset($_SESSION['csrf']))
-        $_SESSION['csrf'] = bin2hex(random_bytes(32));
-    return $_SESSION['csrf'];
-}
-function checkCsrf(): void
-{
-    if (!hash_equals(csrf(), (string) ($_POST['csrf'] ?? ''))) {
-        http_response_code(403);
-        exit('Ungültige Anfrage (CSRF).');
-    }
-}
-function loggedIn(): bool
-{
-    return isset($_SESSION['user'], $_SESSION['role']) && in_array($_SESSION['role'], ['admin', 'viewer'], true);
-}
-function isAdmin(): bool
-{
-    return loggedIn() && $_SESSION['role'] === 'admin';
-}
-function requireLogin(): void
-{
-    if (!loggedIn()) {
-        header('Location: login.php', true, 303);
-        exit;
-    }
-}
-function requireAdmin(): void
-{
-    requireLogin();
-    if (!isAdmin()) {
-        http_response_code(403);
-        exit('Zugriff nur für Administratoren.');
-    }
-}
-function redirect(string $destination): never
-{
-    header('Location: ' . $destination, true, 303);
-    exit;
-}
-function flash(string $message): void
-{
-    $_SESSION['flash'] = $message;
-}
-function takeFlash(): string
-{
-    $message = (string) ($_SESSION['flash'] ?? '');
-    unset($_SESSION['flash']);
-    return $message;
-}
-function positiveId(mixed $value): int
-{
-    $id = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-    return $id === false ? 0 : $id;
-}
-function rackAndUnit(?string $position): array
-{
-    if (preg_match('/^Rack ([1-3]) \/ HE ([1-9]|[12][0-9]|30)$/', trim((string) $position), $m)) {
-        return [(int) $m[1], (int) $m[2]];
-    }
-    return [null, null];
-}
-function rackLabel(int $rack): string
-{
-    return '10.78.' . $rack . '.x';
-}
-function statusFor(int $deviceId, array $openIssues, ?string $lastChecked): string
-{
-    $level = 'unknown';
-    foreach ($openIssues as $issue) {
-        if ((int) $issue['device_id'] !== $deviceId)
-            continue;
-        if (preg_match('/critical|kritisch|offline|down|ausfall|nicht erreichbar|error/i', (string) $issue['type']))
-            return 'critical';
-        $level = 'warning';
-    }
-    return $level === 'unknown' && $lastChecked !== null ? 'checked' : $level;
-}
-function statusLabel(string $status): string
-{
-    return ['critical' => 'Kritisch', 'warning' => 'Warnung', 'checked' => 'Geprüft', 'unknown' => 'Nicht geprüft'][$status] ?? 'Unbekannt';
-}
-function pillClass(string $status): string
-{
-    return ['critical' => 'red-pill', 'warning' => 'amber-pill', 'checked' => 'green-pill', 'unknown' => 'neutral-pill'][$status] ?? 'neutral-pill';
-}
-function issueCritical(array $issue): bool
-{
-    return (bool) preg_match('/critical|kritisch|offline|down|ausfall|nicht erreichbar|error/i', (string) $issue['type']);
-}
+require_once __DIR__ . '/app/Support/helpers.php';
