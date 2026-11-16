@@ -12,23 +12,21 @@ $bodyClass = (string) ($bodyClass ?? '');
     <meta name="theme-color" content="#101820">
     <meta name="description" content="NetLab Guardian – Inventar, Netzwerkchecks und Incidents">
     <title><?= h($pageTitle) ?> · NetLab Guardian</title>
-    <link rel="stylesheet" href="style.css?v=20261116-ui">
+    <link rel="stylesheet" href="style.css?v=20261116-ajaxfix-3">
+    <script src="assets/js/interface.js?v=20261116-ajaxfix-3" defer></script>
 </head>
 <body class="<?= h($bodyClass) ?>">
 <div class="app-shell">
     <aside class="app-sidebar" aria-label="Seitennavigation">
-        <a class="app-logo" href="index.php"><span class="logo-symbol" aria-hidden="true">N</span><span>NetLab <b>Guardian</b><small>Netzwerkverwaltung</small></span></a>
+        <a class="app-logo" href="index.php"><span class="logo-symbol" aria-hidden="true">N</span><span>NetLab <b>Guardian</b></span></a>
         <div class="sidebar-group-label">Monitoring</div>
         <nav class="sidebar-nav" aria-label="Monitoring">
-            <a class="<?= $pageKey === 'dashboard' ? 'is-active' : '' ?>" href="index.php#overview"><span aria-hidden="true">▦</span> Übersicht</a>
-            <a href="index.php#issues"><span aria-hidden="true">◎</span> Incidents</a>
-            <a href="index.php#inventory"><span aria-hidden="true">▤</span> Geräteinventar</a>
-            <a href="index.php#racks"><span aria-hidden="true">▥</span> Racks &amp; Checks</a>
+            <a class="<?= $pageKey === 'dashboard' ? 'is-active' : '' ?>" href="index.php"><span aria-hidden="true">▦</span> Übersicht</a>
+            <a class="<?= $pageKey === 'details' || $pageKey === 'device' ? 'is-active' : '' ?>" href="details.php"><span aria-hidden="true">▤</span> Geräte &amp; Incidents</a>
         </nav>
         <?php if (isAdmin()): ?>
         <div class="sidebar-group-label">Verwaltung</div>
         <nav class="sidebar-nav" aria-label="Verwaltung">
-            <a class="<?= $pageKey === 'admin' ? 'is-active' : '' ?>" href="admin.php"><span aria-hidden="true">⚙</span> Geräte verwalten</a>
             <a class="<?= $pageKey === 'credentials' ? 'is-active' : '' ?>" href="credentials.php"><span aria-hidden="true">◈</span> Zugangsdaten</a>
             <a class="<?= $pageKey === 'users' ? 'is-active' : '' ?>" href="site_users.php"><span aria-hidden="true">♙</span> Benutzer</a>
         </nav>
@@ -43,6 +41,6 @@ $bodyClass = (string) ($bodyClass ?? '');
     </aside>
     <div class="app-content">
         <header class="app-topbar">
-            <div><span class="topbar-location">NetLab / <?= h($pageTitle) ?></span><span class="topbar-title"><?= h($pageTitle) ?></span></div>
-            <span class="topbar-context">Labor-Netzwerk <span class="topbar-dot" aria-hidden="true"></span> SQLite-Inventar</span>
+            <div><span class="topbar-title"><?= h($pageTitle) ?></span></div>
+            
         </header>

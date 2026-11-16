@@ -1,6 +1,6 @@
 # NetLab Guardian installieren (Debian/Ubuntu)
 
-Dieser Installer ist für lokale Linux-Server mit Apache oder PHP-FPM gedacht. Er läuft **ausschließlich im Terminal**, nicht über den Browser. Alle Pfade sind relativ zu `/var/www/NetLab_Guardian` (oder deinem tatsächlichen Projektstamm, der `setup.php` enthält).
+Dieser Installer ist für lokale Linux-Server mit Apache oder PHP-FPM gedacht. Er läuft **ausschließlich im Terminal**, nicht über den Browser. Alle Pfade sind relativ zu `/var/www/NetLab_Guardian` (oder deinem tatsächlichen Projektstamm, der `install.sh` enthält).
 
 ## 1. Projekt auf den Server kopieren
 
@@ -27,7 +27,7 @@ Der Installer erledigt in dieser Reihenfolge:
 2. Legt das Verzeichnis `storage/` an, setzt es auf **Owner=Deploy-Benutzer, Gruppe=Webserver-Gruppe, Modus 2770** (setgid) und korrigiert den Besitzer/die Gruppe einer bereits existierenden `inventory.sqlite` auf **Deploy-Benutzer:Webserver-Gruppe, Modus 0660**. `.sqlite-wal`, `.sqlite-shm` und `.sqlite-journal` werden bei Bedarf ebenfalls korrigiert. **Kein `chmod 777`.**
 3. Erstellt `python_scripts/.venv` **als Deploy-Benutzer**, installiert die Pakete aus `python_scripts/requirements.txt` per `pip` und prüft, ob der Webserver-Benutzer Netmiko importieren kann. Die PHP-Checks verwenden ohne `NETLAB_PYTHON` bereits `python_scripts/.venv/bin/python`.
 4. Initialisiert die SQLite-Datenbank (falls sie fehlt) bzw. führt vorhandene Schema-Ergänzungen aus, **ohne Geräte/Incidents zu löschen**. Existiert die Datenbank, wird vor der Migration eine zusätzliche Datei `backups/inventory.sqlite.backup-ZEITSTEMPEL.ZUFALL` angelegt.
-5. Legt den Admin-Benutzer an und fragt das Passwort interaktiv und ohne Echo ab. Existiert der Admin schon, wird dessen Passwort **nicht** verändert; verwende zum Zurücksetzen `--reset-admin` oder später `php setup.php admin admin`.
+5. Legt den Admin-Benutzer an und fragt das Passwort interaktiv und ohne Echo ab. Existiert der Admin schon, wird dessen Passwort **nicht** verändert; verwende zum Zurücksetzen `--reset-admin` oder später `php bin/user.php admin admin`.
 6. Prüft Lese- und Schreibrechte beider Benutzer auf die Datenbank, Schreibzugriff auf `storage/`, Leserechte der PHP-Dateien und den Start der `.venv` durch den Webserver-Benutzer. Bei einer fehlgeschlagenen Prüfung bricht der Installer mit Fehlerhinweis ab.
 
 **Wichtig zum Backup:** Die automatisch angelegte Datei ist eine einfache Kopie. Bei Datenbankzugriffen während des Kopierens ist sie nicht garantiert konsistent. Vor einer größeren Aktualisierung die Website/Checks kurz anhalten oder ein konsistentes SQLite-Backup mit einem dafür geeigneten Backup-Verfahren erstellen. Bestehende DB-Dateien werden vom Installer nicht gelöscht. Das Backup enthält auch gespeicherte Zugangsdaten und ist unter `backups/` mit **0700** für das Verzeichnis und **0600** für die Datei vor dem Webserver geschützt.
@@ -55,7 +55,7 @@ drwxrws--- user www-data  storage/
 -rw-rw---- user www-data  storage/inventory.sqlite
 ```
 
-Schlägt `php setup.php admin admin` mit `SQLSTATE[HY000] [14] unable to open database file` fehl, fehlen meist Rechte auf der Datenbank oder einem übergeordneten Ordner, `storage/` existiert nicht oder es fehlt das SQLite-Modul. Der Installer kontrolliert diese Fälle und repariert die Rechte der genannten Dateien. Sollte die Datenbank nach der Installation weiter nicht erreichbar sein, prüfe das Dateisystem auf Nur-Lese-Modus, SELinux-/AppArmor-Regeln und den tatsächlich verwendeten Webserver-Benutzer.
+Schlägt `php bin/user.php admin admin` mit `SQLSTATE[HY000] [14] unable to open database file` fehl, fehlen meist Rechte auf der Datenbank oder einem übergeordneten Ordner, `storage/` existiert nicht oder es fehlt das SQLite-Modul. Der Installer kontrolliert diese Fälle und repariert die Rechte der genannten Dateien. Sollte die Datenbank nach der Installation weiter nicht erreichbar sein, prüfe das Dateisystem auf Nur-Lese-Modus, SELinux-/AppArmor-Regeln und den tatsächlich verwendeten Webserver-Benutzer.
 
 ## 4. Webserver prüfen
 
@@ -67,9 +67,20 @@ Wenn `NETLAB_PYTHON` in der PHP-Serverumgebung gesetzt ist, überschreibt es die
 
 ## 5. Wartung und weitere Benutzer
 
-- Passwort ändern oder weiteren Admin anlegen: `php setup.php admin admin` (beim direkten CLI-Aufruf muss der Benutzer auf die Datenbank zugreifen können).
+- Passwort ändern oder weiteren Admin anlegen: `php bin/user.php admin admin` (beim direkten CLI-Aufruf muss der Benutzer auf die Datenbank zugreifen können).
 - Nur Pakete aktualisieren/Rechte prüfen: `sudo bash install.sh --app-user user --web-user www-data` – die Installation ist wiederholbar.
 - Admin-Passwort im Installer zurücksetzen: `sudo bash install.sh --reset-admin --admin admin`.
 - Keine Passwörter als Skriptparameter übergeben. Das Admin-Passwort wird interaktiv eingegeben.
 
 Siehe [DATEIPFADE.md](DATEIPFADE.md) für alle Upload-Zielpfade der neuen Dateien. `app/Database/db_internal_api.php` bleibt die eigentliche DB-Klasse, `db_internal_api.php` im Projektstamm nur der Kompatibilitäts-Loader.
+
+## Update von der bisherigen Admin-Seite
+
+Beim Umstieg auf das neue visuelle Dashboard und die getrennten Detailtabellen müssen die folgenden veralteten Dateien manuell entfernt werden (ein Entpacken der ZIP löscht sie nicht automatisch):
+
+```bash
+cd /var/www/NetLab_Guardian
+rm -- public/admin.php app/Controllers/admin.php app/Views/pages/admin.php
+```
+
+Die Geräteverwaltung ist danach über `public/device.php` erreichbar. `public/details.php` zeigt die Tabellen für Geräte und Incidents. Die Datenbank und die Python-Checks werden nicht geändert.

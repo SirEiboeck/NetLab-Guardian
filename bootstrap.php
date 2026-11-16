@@ -37,6 +37,9 @@ $requiredFiles = [
     'app/Checks/IncidentResults.php',
     'app/Views/dashboard.php',
     'app/Controllers/dashboard.php',
+    'app/Controllers/monitoring.php',
+    'app/Controllers/device.php',
+    'app/Views/details.php',
 ];
 foreach ($requiredFiles as $relativeFile) {
     if (!is_file(__DIR__ . '/' . $relativeFile)) {
@@ -65,7 +68,7 @@ if (PHP_SAPI !== 'cli') {
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: same-origin');
     header('X-Frame-Options: DENY');
-    header("Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; script-src 'none'; object-src 'none'");
+    header("Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; script-src 'self'; object-src 'none'");
     header('Cache-Control: no-store, private');
     session_name('netlab_session');
     session_set_cookie_params([

@@ -1,5 +1,5 @@
 <?php if (($pageKey ?? '') !== 'login'): ?>
-        <footer class="app-footer"><span>NetLab Guardian</span><span>Lokale Inventar- und Checkdaten · Kein automatisches Scan-Intervall</span></footer>
+        <footer class="app-footer"><span>NetLab Guardian</span></footer>
     </div>
 </div>
 <?php endif; ?>

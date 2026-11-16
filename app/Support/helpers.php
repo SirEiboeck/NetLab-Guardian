@@ -43,6 +43,16 @@ function requireAdmin(): void
 }
 function redirect(string $destination): never
 {
+    // AJAX-POSTs dürfen dem Redirect nicht automatisch folgen: Ein durch
+    // Reverse-Proxy/DirectoryIndex abweichender Pfad (z.B. / statt /index.php)
+    // würde sonst einen 404 auslösen, obwohl der POST bereits gespeichert wurde.
+    // Das Ziel wird deshalb als Header übergeben. Ohne JavaScript bleibt
+    // Post/Redirect/Get (HTTP 303) unverändert erhalten.
+    if (strtolower((string) ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '')) === 'xmlhttprequest') {
+        header('X-NetLab-Redirect: ' . $destination);
+        http_response_code(204);
+        exit;
+    }
     header('Location: ' . $destination, true, 303);
     exit;
 }

@@ -2,13 +2,10 @@
 <main class="workspace admin-workspace">
         <div class="section-top">
             <div>
-                <div class="eyebrow muted">ADMINISTRATOREN</div>
                 <h1>Website-Benutzer</h1>
-                <p class="subtle">Konten anlegen, Rollen vergeben, Passwörter zurücksetzen und Benutzer löschen.</p>
             </div>
             <a class="button light" href="site_users.php?edit=new#editor">Benutzer hinzufügen</a>
         </div>
-        <p class="admin-note">Angemeldet als <?= h($_SESSION['user']) ?>. Nur Administratoren haben Zugriff.</p>
         <?php if ($flash): ?><p class="notice success" role="status"><?= h($flash) ?></p><?php endif; ?>
         <?php if ($error): ?><p class="notice error" role="alert"><?= h($error) ?></p><?php endif; ?>
 

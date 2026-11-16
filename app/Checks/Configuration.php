@@ -133,7 +133,7 @@ function rackDiscoveryTargets(mixed $discover): array
 /**
  * Erstellt Prüfpläne für Rack-Geräte und zusätzliche IPs aus discover.ranges.
  * Standardzugangsdaten stammen aus SQLite; im Browser erscheinen nur Platzhalter.
- * Geräten explizit zugeordnete Credentials haben Vorrang vor dem globalen Pool.
+ * Alle Geräte verwenden denselben globalen Credential-Pool.
  * Das unveränderte Python-Config-Modul identifiziert Credentials am Benutzernamen.
  */
 function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settings, bool $includeScan = true): array
@@ -154,7 +154,7 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
         }
     }
 
-    // Globale DB-Credentials; eine Gerätezuordnung schränkt die Auswahl pro Gerät ein.
+    // Globale DB-Credentials gelten für alle Geräte.
     $credentialRows = $db->all('credential', [], 10000);
     $credentialsById = [];
     foreach ($credentialRows as $row) {
@@ -173,8 +173,8 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
         ], $credentialRows);
     }
 
-    // Die IDs dienen der dauerhaften Zuordnung eines Credentials zu einem Gerät.
-    // Ein Eintrag ohne ID bleibt weiterhin als temporäres JSON-Credential möglich.
+    // IDs dienen zum Nachladen der gespeicherten Passwörter aus SQLite.
+    // Ein Eintrag ohne ID ist ein temporäres JSON-Credential.
     $effectiveCredentials = [];
     foreach ($entries as $credential) {
         if (!is_array($credential) || array_diff(array_keys($credential), ['id', 'username', 'password']) ||
@@ -256,27 +256,9 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
     $primary = [];
     $retries = [];
     $skipped = 0;
-    $assignmentCache = [];
     foreach ($targetOptions as $ip => $options) {
-        // Nur bei expliziter Gerätezuordnung die globale Liste einschränken.
-        // Geräte ohne Zuordnung und noch nicht inventarisierte Scan-IPs
-        // verwenden weiterhin alle Credentials der JSON-Konfiguration.
-        $assignedIds = [];
-        if (isset($knownGlobally[$ip])) {
-            $deviceId = (int) $knownGlobally[$ip]['id'];
-            if (!array_key_exists($deviceId, $assignmentCache)) {
-                $assignmentCache[$deviceId] = array_fill_keys(array_map(
-                    static fn(array $row): int => (int) $row['id'],
-                    $db->deviceCredentials($deviceId)
-                ), true);
-            }
-            $assignedIds = $assignmentCache[$deviceId];
-        }
         $byUsername = [];
         foreach ($effectiveCredentials as $credential) {
-            if ($assignedIds && ($credential['id'] === null || !isset($assignedIds[$credential['id']]))) {
-                continue;
-            }
             $username = $credential['username'];
             $password = $credential['password'];
             if (!isset($byUsername[$username]) || !in_array($password, $byUsername[$username], true)) {
@@ -284,7 +266,7 @@ function rackExecutionPlans(DBInternalAPI $db, array $rackDevices, array $settin
             }
         }
         if (!$byUsername) {
-            throw new RuntimeException('Für ' . $ip . ' sind keine zugeordneten Credentials im JSON enthalten. Bitte die Credential-Auswahl prüfen.');
+            throw new RuntimeException('Für ' . $ip . ' sind keine Credentials konfiguriert.');
         }
         // Gleiche Benutzernamen mit mehreren Passwörtern werden nacheinander probiert.
         $selected = [];

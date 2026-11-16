@@ -344,51 +344,6 @@ final class DBInternalAPI
             'resolved' => (int) $row['resolved']];
     }
 
-    public function deviceCredentials(int $deviceId): array
-    {
-        $stmt = $this->db->prepare('SELECT c.* FROM credential c JOIN device_credential dc ON dc.credential_id = c.id WHERE dc.device_id = ?');
-        $stmt->execute([$deviceId]);
-        return $stmt->fetchAll(); // Enthält pwd im Klartext, wie im Schema vorgegeben.
-    }
-
-    public function assignCredential(int $deviceId, int $credentialId): void
-    {
-        $stmt = $this->db->prepare('INSERT OR IGNORE INTO device_credential (device_id, credential_id) VALUES (?, ?)');
-        $stmt->execute([$deviceId, $credentialId]);
-    }
-
-    public function unassignCredential(int $deviceId, int $credentialId): void
-    {
-        $stmt = $this->db->prepare('DELETE FROM device_credential WHERE device_id = ? AND credential_id = ?');
-        $stmt->execute([$deviceId, $credentialId]);
-    }
-
-    /** Ersetzt die gerätespezifische Credential-Auswahl atomar.
-     *  Leere Auswahl = kein Override; bei Checks gelten dann alle globalen Credentials.
-     */
-    public function setDeviceCredentials(int $deviceId, array $credentialIds): void
-    {
-        if ($deviceId < 1 || count($credentialIds) > 10000) {
-            throw new InvalidArgumentException('Ungültige Geräte-Credential-Zuordnung.');
-        }
-        $this->db->beginTransaction();
-        try {
-            $delete = $this->db->prepare('DELETE FROM device_credential WHERE device_id = ?');
-            $delete->execute([$deviceId]);
-            $insert = $this->db->prepare('INSERT INTO device_credential (device_id, credential_id) VALUES (?, ?)');
-            foreach (array_unique($credentialIds) as $credentialId) {
-                if (!is_int($credentialId) || $credentialId < 1) {
-                    throw new InvalidArgumentException('Ungültige Credential-ID.');
-                }
-                $insert->execute([$deviceId, $credentialId]);
-            }
-            $this->db->commit();
-        } catch (Throwable $e) {
-            $this->db->rollBack();
-            throw $e;
-        }
-    }
-
     /** Interne Website-Anmeldung; niemals das Klartextfeld credential.pwd verwenden. */
     public function siteUser(string $username): ?array
     {
@@ -429,7 +384,7 @@ final class DBInternalAPI
     {
         $this->checkTable($table);
         if ($table === 'device_credential') {
-            throw new InvalidArgumentException('device_credential: assignCredential()/unassignCredential() benutzen.');
+            throw new InvalidArgumentException('Veraltete Zuordnungstabelle ist nicht über die Website bearbeitbar.');
         }
         return $table === 'command' ? 'command' : 'id';
     }

@@ -29,22 +29,22 @@
                                         <input type="hidden" name="csrf" value="<?= h(csrf()) ?>">
                                         <input type="hidden" name="rack" value="<?= $rack ?>">
                                         <input type="hidden" name="mode" value="default">
-                                        <button type="submit" name="action" value="check" class="rack-run-button" title="Nur vorhandene, nicht ausgeschlossene Rack-Geräte prüfen">▶ Prüfen</button>
-                                        <button type="submit" name="action" value="scan" class="rack-run-button rack-run-scan" title="IP-Bereiche scannen, neue Geräte registrieren und alle zulässigen Ziele prüfen">⌕ IP-Scan + Prüfen</button>
+                                        <button type="submit" name="action" value="check" class="rack-run-button" title="Nur vorhandene, nicht ausgeschlossene Rack-Geräte prüfen">Prüfen</button>
+                                        <button type="submit" name="action" value="scan" class="rack-run-button rack-run-scan" title="IP-Bereiche scannen, neue Geräte registrieren und alle zulässigen Ziele prüfen">IP-Scan</button>
                                     </form>
                                 </div>
                             <?php endif; ?>
                         </div>
                         <?php if (isAdmin()): ?>
                             <details class="rack-settings">
-                                        <summary aria-label="JSON-Einstellungen für Rack <?= $rack ?>" title="JSON-Einstellungen für Rack <?= $rack ?>">⚙</summary>
+                                        <summary aria-label="Erweiterte Einstellungen · Rack <?= $rack ?>" title="Erweiterte Einstellungen · Rack <?= $rack ?>">⚙</summary>
                                         <div class="rack-settings-panel">
                                             <form method="post" action="index.php#rack-<?= $rack ?>">
                                                 <input type="hidden" name="csrf" value="<?= h(csrf()) ?>">
                                                 <input type="hidden" name="rack" value="<?= $rack ?>">
                                                 <input type="hidden" name="mode" value="custom">
                                                 <label for="rack-json-<?= $rack ?>">JSON-Konfiguration für Rack <?= $rack ?></label>
-                                                <p>„Nur Geräte prüfen“ verwendet ausschließlich die vorhandenen Rack-Geräte aus <code>devices</code> – ohne Netzwerk-Scan. „IP-Scan + Prüfen“ verwendet zusätzlich <code>discover.ranges</code> und <code>discover.exclude</code> (nur für unbekannte Scan-Ziele). Dauerhaft ausgeschlossene Geräte werden bei beiden Aktionen immer übersprungen, auch wenn sie explizit unter <code>devices</code> stehen. Das Rack-Netz 10.78.<?= $rack ?>.1–254 ist voreingestellt. Unter <code>devices</code> bleiben vorhandene Geräte separat konfigurierbar. Unbelegte IPs erzeugen keine Fehler. Erreichbare, vom Python-Skript erkannte neue Geräte werden im Rack registriert, vorläufig einer freien HE zugewiesen und können anschließend im Adminbereich bearbeitet werden. Falls das Rack voll ist, werden sie ohne HE registriert. Bereits vorhandene Geräte bleiben in ihrem Rack; gemeldete Fehler werden gespeichert. Die Passwörter bleiben mit <code>[aus Datenbank]</code> verborgen und werden beim Start serverseitig ergänzt. Du kannst Username oder Passwort im Editor nur für diesen einen Prüflauf ändern oder neue Einträge ohne id hinzufügen. Die JSON-Einstellungen werden nicht gespeichert; Inventar und Prüfergebnisse werden in SQLite gespeichert. Gespeicherte Zugangsdaten lassen sich unter <a href="credentials.php">Credentials verwalten</a> bearbeiten und einzelnen Geräten zuordnen. Ohne Gerätezuordnung werden alle globalen Credentials verwendet; bei einer Zuordnung nur diese. Der unter defaults.port bzw. devices[IP].port eingestellte Port wird für den Gerätezugriff verwendet.</p>
+                                                <p>Diese Einstellungen gelten nur für den aktuellen Prüflauf.</p>
                                                 <textarea id="rack-json-<?= $rack ?>" name="settings_json" rows="13" maxlength="64000" spellcheck="false" required><?= h($editorJson) ?></textarea>
                                                 <div class="rack-settings-buttons">
                                                     <button type="reset" class="rack-reset-button">Zurücksetzen</button>
@@ -57,6 +57,12 @@
                         <?php endif; ?>
                         <?php if (is_array($checkNotice) && (int) $checkNotice['rack'] === $rack): ?>
                             <div class="rack-check-notice notice <?= $checkNotice['success'] ? 'success' : 'error' ?>" role="status">
+                                <form class="rack-dismiss-form" method="post" action="index.php#rack-<?= $rack ?>">
+                                    <input type="hidden" name="csrf" value="<?= h(csrf()) ?>">
+                                    <input type="hidden" name="rack" value="<?= $rack ?>">
+                                    <input type="hidden" name="mode" value="dismiss_notice">
+                                    <button type="submit" class="notice-close" aria-label="Meldung schließen" title="Schließen">×</button>
+                                </form>
                                 <strong><?= h($checkNotice['message']) ?></strong>
                                 <?php if ($checkNotice['failures']): ?>
                                     <ul class="rack-check-errors">
@@ -77,7 +83,7 @@
                             </div>
                         <?php endif; ?>
                         <div class="rack-frame">
-                            <?php for ($unit = 1; $unit <= 30; ++$unit): ?>
+                            <?php for ($unit = 1; $unit <= $rackDisplayUnits; ++$unit): ?>
                                 <?php if (!isset($rackSlots[$unit])): ?>
                                     <div class="empty-unit"><span
                                             class="unit"><?= str_pad((string) $unit, 2, '0', STR_PAD_LEFT) ?></span><span>Frei</span>
@@ -105,15 +111,14 @@
                                 <div class="unpositioned-devices"><b>Ohne HE zugeordnet:</b>
                                     <?php foreach ($rackUnpositioned as $unpositioned): ?>
                                         <div class="unpositioned-device">
-                                            <a href="<?= isAdmin() ? 'admin.php?edit=' . (int) $unpositioned['id'] . '#editor' : 'device.php?id=' . (int) $unpositioned['id'] ?>"><?= h($unpositioned['hostname'] ?: $unpositioned['management_ip']) ?></a>
+                                            <a href="<?= 'device.php?id=' . (int) $unpositioned['id'] ?>"><?= h($unpositioned['hostname'] ?: $unpositioned['management_ip']) ?></a>
                                             <?php rackLockControl($unpositioned, $rack); ?>
                                         </div>
                                     <?php endforeach; ?>
                                 </div>
-                                <span>HE im Adminbereich zuweisen</span>
+                                
                             </div>
                         <?php endif; ?>
-                        <div class="rack-footer"><span><b><?= count($rackDevices) ?> Geräte</b> / <?= $switches ?> Switches
-                                / <?= $routers ?> Router</span><span><?= count($rackSlots) ?> / 30 HE</span></div>
+                        <div class="rack-footer"><span><b><?= count($rackDevices) ?> Geräte</b> · <?= $switches ?> Switches · <?= $routers ?> Router</span><span><?= count($rackSlots) ?> belegt · <?= $rackDisplayUnits ?> HE angezeigt</span></div>
                     </article>
                 

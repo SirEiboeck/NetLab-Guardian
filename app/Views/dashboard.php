@@ -1,22 +1,49 @@
 <?php require __DIR__ . '/layout/top.php'; ?>
+<?php
+$total = count($devices);
+$healthy = $statusCount('checked');
+$warning = $statusCount('warning');
+$critical = $statusCount('critical');
+$unknown = $statusCount('unknown');
+?>
 <main class="workspace dashboard-workspace" id="overview">
     <div class="dashboard-heading">
-        <div>
-            <p class="dashboard-kicker">MONITORING / NETZWERKLABOR</p>
-            <h1>Netzwerkübersicht</h1>
-            <p class="subtle">Geräte, aktuelle Störungen und Rack-Prüfungen auf einen Blick.</p>
+        <h1>Übersicht</h1>
+        <div class="dashboard-heading-actions">
+            <a class="button outline" href="details.php">Geräte &amp; Incidents</a>
+            <?php if (isAdmin()): ?><a class="button light" href="device.php">+ Gerät hinzufügen</a><?php endif; ?>
         </div>
-        <?php if (isAdmin()): ?><a href="admin.php?edit=new#editor" class="button light">+ Gerät hinzufügen</a><?php endif; ?>
     </div>
-    <section class="metric-grid" aria-label="Statuszahlen">
-        <div class="metric"><span>Geräte insgesamt</span><strong><?= count($devices) ?></strong><small>Im aktiven Inventar</small></div>
-        <div class="metric"><span>Ohne offene Probleme</span><strong><?= $statusCount('checked') ?></strong><small>Zuletzt erfolgreich geprüft</small></div>
-        <div class="metric"><span>Warnungen</span><strong><?= $statusCount('warning') ?></strong><small>Betroffene Geräte</small></div>
-        <div class="metric metric-danger"><span>Kritische Geräte</span><strong><?= $statusCount('critical') ?></strong><small>Handlungsbedarf</small></div>
-        <div class="metric"><span>Offene Incidents</span><strong><?= (int) $incidentCounts['open'] ?></strong><small><?= $statusCount('unknown') ?> nicht geprüfte Geräte</small></div>
+    <section class="dashboard-panel status-overview" aria-labelledby="status-overview-heading">
+        <div class="panel-heading"><h2 id="status-overview-heading">Statusübersicht</h2></div>
+        <div class="donut-grid">
+            <?php
+            $chartId = 'device-chart';
+            $chartTitle = 'Geräte';
+            $chartTotal = $total;
+            $chartCenter = $total;
+            $chartCenterLabel = 'Geräte gesamt';
+            $chartSegments = [
+                ['label' => 'Geprüft', 'count' => $healthy, 'tone' => 'healthy'],
+                ['label' => 'Warnung', 'count' => $warning, 'tone' => 'warning'],
+                ['label' => 'Kritisch', 'count' => $critical, 'tone' => 'critical'],
+                ['label' => 'Nicht geprüft', 'count' => $unknown, 'tone' => 'unknown'],
+            ];
+            require __DIR__ . '/dashboard/status_chart.php';
+
+            $chartId = 'incident-chart';
+            $chartTitle = 'Incidents';
+            $chartTotal = (int) $incidentCounts['all'];
+            $chartCenter = (int) $incidentCounts['open'];
+            $chartCenterLabel = 'Offen';
+            $chartSegments = [
+                ['label' => 'Offen', 'count' => (int) $incidentCounts['open'], 'tone' => 'open'],
+                ['label' => 'Gelöst', 'count' => (int) $incidentCounts['resolved'], 'tone' => 'resolved'],
+            ];
+            require __DIR__ . '/dashboard/status_chart.php';
+            ?>
+        </div>
     </section>
-    <?php require __DIR__ . '/dashboard/incidents.php'; ?>
-    <?php require __DIR__ . '/dashboard/inventory.php'; ?>
     <?php require __DIR__ . '/dashboard/racks.php'; ?>
 </main>
 <?php require __DIR__ . '/layout/bottom.php'; ?>

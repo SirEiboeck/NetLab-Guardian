@@ -75,7 +75,7 @@ VENV_PY="$VENV/bin/python"
 as_app() { runuser -u "$APP_USER" -- "$@"; }
 as_web() { runuser -u "$WEB_USER" -- "$@"; }
 
-for f in schema.sql setup.php db_internal_api.php app/Database/db_internal_api.php app/Support/ProjectPaths.php public/index.php python_scripts/main.py python_scripts/requirements.txt; do
+for f in schema.sql bin/user.php db_internal_api.php app/Database/db_internal_api.php app/Support/ProjectPaths.php public/index.php python_scripts/main.py python_scripts/requirements.txt; do
     need_file "$f"
 done
 [[ ! -L "$STORAGE" && ! -L "$DB" && ! -L "$VENV" ]] || fail 'storage/, SQLite-Datei oder .venv ist ein Symlink; bitte manuell prüfen.'
@@ -143,6 +143,9 @@ install_packages() {
 }
 
 say "Projekt: $ROOT | Deploy-Benutzer: $APP_USER | Webserver: $WEB_USER:$WEB_GROUP"
+if [[ -f "$ROOT/setup.php" ]]; then
+    echo "  Hinweis: veraltete setup.php nach dem Update manuell entfernen."
+fi
 if ! command -v php >/dev/null 2>&1; then install_packages php-cli; fi
 if ! command -v python3 >/dev/null 2>&1; then install_packages python3; fi
 python_ok || fail 'Python muss mindestens 3.10 sein. Bitte eine kompatible Python-Version installieren.'
@@ -175,7 +178,7 @@ chmod 0700 "$BACKUPS"
 # Nur Codegruppen lesbar machen; Webserver soll PHP-Dateien niemals schreiben dürfen.
 chgrp "$WEB_GROUP" "$ROOT"
 chmod g+rx,g-w,o-w "$ROOT"
-for dir in app public python_scripts; do
+for dir in app public python_scripts bin; do
     chgrp -R "$WEB_GROUP" "$ROOT/$dir"
     chmod -R g+rX,g-w "$ROOT/$dir"
 done
@@ -228,8 +231,8 @@ chmod 0660 "$DB"
 
 if (( RESET_ADMIN )) || ! as_app php -r 'require $argv[1]; $db = new DBInternalAPI(); exit($db->siteUser($argv[2]) === null ? 1 : 0);' "$ROOT/db_internal_api.php" "$ADMIN_USER"; then
     say "Richte Admin-Benutzer '$ADMIN_USER' ein (Passwort wird nicht angezeigt)"
-    [[ -t 0 ]] || fail "Für das Admin-Passwort ist ein Terminal erforderlich. Danach manuell: php setup.php $ADMIN_USER admin"
-    as_app php "$ROOT/setup.php" "$ADMIN_USER" admin || fail 'Admin-Einrichtung fehlgeschlagen.'
+    [[ -t 0 ]] || fail "Für das Admin-Passwort ist ein Terminal erforderlich. Danach manuell: php bin/user.php $ADMIN_USER admin"
+    as_app php "$ROOT/bin/user.php" "$ADMIN_USER" admin || fail 'Admin-Einrichtung fehlgeschlagen.'
 else
     say "Admin '$ADMIN_USER' existiert bereits – Kennwort bleibt unverändert (--reset-admin zum Ändern)."
 fi

@@ -1,11 +1,11 @@
 <section class="dashboard-panel" id="inventory" aria-labelledby="inventory-heading">
     <div class="panel-heading">
-        <div><span class="section-overline">02 / INVENTAR</span><h2 id="inventory-heading">Geräte</h2><p>Aktive Geräte, ihre Position und der letzte bekannte Status.</p></div>
-        <form class="inventory-search" method="get" action="index.php#inventory">
+        <div><h2 id="inventory-heading">Geräte</h2></div>
+        <form class="inventory-search" method="get" action="details.php#inventory">
             <label class="visually-hidden" for="device-query">Gerät oder IP suchen</label>
             <input id="device-query" name="q" type="search" value="<?= h($query) ?>" placeholder="Hostname, IP, Modell suchen …">
             <button type="submit" class="button outline">Suchen</button>
-            <?php if ($query !== ''): ?><a class="text-button" href="index.php#inventory">Zurücksetzen</a><?php endif; ?>
+            <?php if ($query !== ''): ?><a class="text-button" href="details.php#inventory">Zurücksetzen</a><?php endif; ?>
         </form>
     </div>
     <div class="table-scroll data-table-wrap">

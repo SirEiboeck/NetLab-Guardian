@@ -1,0 +1,73 @@
+/* Kompakte Statusdiagramme: auf breiten Bildschirmen nebeneinander, ohne große Leerflächen. */
+.donut-grid { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px; align-items: stretch; }
+.donut-card {
+    box-sizing: border-box; margin: 0; width: 335px; max-width: 100%; min-width: 0;
+    padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: 8px;
+    background: #19262f; display: grid; grid-template-columns: 126px minmax(0, 1fr);
+    grid-template-rows: min-content 1fr; grid-template-areas: "heading heading" "chart legend";
+    column-gap: 10px; row-gap: 4px;
+}
+.donut-card figcaption { grid-area: heading; font-weight: 650; font-size: 13px; color: #e7eff3; }
+.donut-stage { grid-area: chart; width: 126px; max-width: 100%; margin: 0; align-self: center; position: relative; }
+.donut-svg { display: block; width: 120px; max-width: 100%; height: auto; margin: 0 auto; }
+.donut-track { stroke: #2b3e4c; }
+.donut-segment circle { transition: stroke-width .14s ease, opacity .14s ease; }
+.donut-segment:hover circle, .donut-segment:focus circle { stroke-width: 25; }
+.donut-segment:focus-visible { outline: none; }
+.donut-healthy circle, .donut-swatch.donut-healthy { stroke: #72bda2; background: #72bda2; }
+.donut-warning circle, .donut-swatch.donut-warning { stroke: #d6ae6a; background: #d6ae6a; }
+.donut-critical circle, .donut-swatch.donut-critical { stroke: #d8868d; background: #d8868d; }
+.donut-unknown circle, .donut-swatch.donut-unknown { stroke: #728a9b; background: #728a9b; }
+.donut-open circle, .donut-swatch.donut-open { stroke: #d8868d; background: #d8868d; }
+.donut-resolved circle, .donut-swatch.donut-resolved { stroke: #72bda2; background: #72bda2; }
+.donut-center-value { font-size: 35px; font-weight: 700; fill: #f0f5f8; font-variant-numeric: tabular-nums; }
+.donut-center-label { font-size: 11px; fill: #98afbc; }
+.donut-tooltip {
+    min-height: 22px; padding: 2px 0; text-align: center; font-size: 10px;
+    color: #a7c6d2; line-height: 1.2; overflow-wrap: anywhere;
+}
+.donut-legend { grid-area: legend; list-style: none; padding: 0; margin: 0; display: grid; align-content: center; gap: 2px; }
+.donut-legend-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 4px 3px; border-radius: 4px; font-size: 11px; }
+.donut-legend-row:hover, .donut-legend-row:focus-visible { background: #263945; outline: 1px solid #476372; }
+.donut-legend-name { display: inline-flex; align-items: center; gap: 5px; color: #d2e0e6; }
+.donut-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.donut-legend-value { color: #e8f1f5; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.donut-legend-value small { color: #96aeba; margin-left: 3px; font-size: 10px; }
+
+/* Gerätestammdaten: Lese- und Bearbeitungsmodus verwenden exakt dieselben Zellen. */
+.detail-workspace .editable-device-table { table-layout: fixed; }
+.detail-workspace .editable-device-table .attribute-label-column { width: 220px; }
+.detail-workspace .editable-device-table td { width: auto; min-width: 0; }
+.detail-workspace .editable-device-table .attribute-content { height: 31px; min-width: 0; position: relative; }
+.detail-workspace .editable-device-table .attribute-content.attribute-notes { height: 48px; }
+.detail-workspace .editable-device-table .device-read-value { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 31px; }
+.detail-workspace .editable-device-table .attribute-notes .device-read-value { white-space: normal; line-height: 20px; max-height: 44px; overflow: hidden; overflow-wrap: anywhere; }
+.detail-workspace .editable-device-table .device-editor { position: absolute; inset: 0; display: none; min-width: 0; }
+/* .device-form ist ein Elternelement der Tabelle (kein direktes Tabellenelement). */
+.detail-workspace .device-form.is-editing .device-read-value { visibility: hidden; }
+.detail-workspace .device-form.is-editing .device-editor { display: block; }
+.detail-workspace .device-form.is-editing .device-editor.device-position-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.detail-workspace .editable-device-table .device-editor input,
+.detail-workspace .editable-device-table .device-editor select,
+.detail-workspace .editable-device-table .device-editor textarea {
+    width: 100%; height: 100%; min-width: 0; max-width: 100%; padding: 3px 9px; margin: 0;
+    line-height: 1.4; font-size: 13px; box-sizing: border-box; resize: none;
+}
+.detail-workspace .editable-device-table .device-editor label { min-width: 0; display: block; height: 100%; }
+.detail-workspace .editable-device-table .attribute-static-value { display: block; min-height: 31px; line-height: 31px; }
+.detail-workspace .device-title-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.detail-workspace .device-editor-actions[hidden] { display: none !important; }
+.detail-workspace .device-editor-actions { min-height: 62px; }
+/* Verhindert den kurzen Sprung nach oben mit anschließendem Smooth-Scroll zum Anker. */
+html { scroll-behavior: auto; }
+
+@media (max-width: 600px) {
+    .donut-grid { padding: 9px; gap: 9px; }
+    .donut-card { padding: 10px; }
+    .detail-workspace .editable-device-table .attribute-label-column { width: 39%; }
+    .detail-workspace .editable-device-table th, .detail-workspace .editable-device-table td { padding: 8px 10px; }
+    .detail-workspace .device-form.is-editing .device-editor.device-position-fields { gap: 4px; }
+    .detail-workspace .editable-device-table .device-editor input,
+    .detail-workspace .editable-device-table .device-editor select { padding: 3px 4px; }
+}
+@media (prefers-reduced-motion: reduce) { .donut-segment circle { transition: none; } }

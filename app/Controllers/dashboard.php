@@ -1,15 +1,8 @@
 <?php
 declare(strict_types=1);
 
+// Rack-Aktionen sind ausschließlich auf der visuellen Startseite zulässig.
 $devices = $db->all('device', ['removed_at' => null], 10000);
-$incidentFilter = (string) ($_GET['incidents'] ?? 'open');
-if (!in_array($incidentFilter, ['open', 'resolved', 'all'], true)) {
-    $incidentFilter = 'open';
-}
-$incidentCounts = $db->incidentCounts();
-$incidents = $db->incidentOverview($incidentFilter, 200);
-$issues = $db->openIssues();
-// Befehle nur bei angemeldeten Admins für die Check-UI laden.
 $checkCredentialRows = isAdmin() ? $db->all('credential', [], 10000) : [];
 $checkCommands = isAdmin()
     ? array_values(array_map(static fn(array $row): string => (string) $row['command'], $db->all('command', [], 50)))
@@ -28,6 +21,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     $mode = (string) ($_POST['mode'] ?? '');
     try {
+        if ($mode === 'dismiss_notice') {
+            unset($_SESSION['rack_check_notice']);
+            redirect('index.php#rack-' . $rack);
+        }
         $rackDevices = array_values(array_filter($devices, static fn(array $device): bool => rackScanPosition($device['rack_position'])[0] === $rack));
 
         if ($mode === 'toggle_exclusion') {
@@ -104,15 +101,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
                 $ok = $counts['ok'] ?? 0;
                 $total = array_sum($counts);
-                $message = "Rack $rack: $ok von $total Geräten ohne Auffälligkeiten";
-                if ($includeScan) {
-                    $message .= "; IP-Scan: $scanSize Adressen, $scanResponsive bisher unbekannte IPs mit offenem Telnet-Port";
-                    $message .= ', ' . count($registered) . ' neue Geräte im Rack registriert';
-                    if ($withoutUnit) $message .= " ($withoutUnit ohne freie HE)";
-                }
-                if ($skippedExcluded) $message .= ", $skippedExcluded Gerät(e) dauerhaft ausgeschlossen";
-                if ($skipped) $message .= ", $skipped ohne gültige Management-IP übersprungen";
-                $message .= '.';
+                $message = "Rack $rack · $ok/$total erfolgreich";
+                if ($includeScan) $message .= ' · ' . count($registered) . ' neu';
+                if ($withoutUnit) $message .= " · $withoutUnit ohne HE";
+                if ($skippedExcluded) $message .= " · $skippedExcluded ausgeschlossen";
+                if ($skipped) $message .= " · $skipped übersprungen";
                 $_SESSION['rack_check_notice'] = [
                     'rack' => $rack, 'success' => !$failures && !$skipped,
                     'message' => $message,
@@ -134,33 +127,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     redirect('index.php#rack-' . $rack);
 }
-foreach ($devices as &$device) {
-    [$device['rack'], $device['unit']] = rackScanPosition($device['rack_position']);
-    $device['status'] = statusFor((int) $device['id'], $issues, $device['last_checked_at']);
-}
-unset($device);
-$deviceById = array_column($devices, null, 'id');
-$statuses = array_count_values(array_column($devices, 'status'));
-$statusCount = static fn(string $status): int => $statuses[$status] ?? 0;
-$problemRacks = [];
-foreach ($devices as $d) {
-    if ($d['rack'] !== null && in_array($d['status'], ['warning', 'critical'], true))
-        $problemRacks[$d['rack']] = true;
-}
-$filter = ($_GET['filter'] ?? '') === 'issues' ? 'issues' : 'all';
-$query = trim((string) ($_GET['q'] ?? ''));
-$visible = array_values(array_filter($devices, static function (array $d) use ($query): bool {
-    if ($query === '')
-        return true;
-    return str_contains(strtolower(implode(' ', [
-        $d['hostname'],
-        $d['management_ip'],
-        $d['device_type'],
-        $d['model'],
-        $d['serial_number'],
-        $d['rack_position'],
-        statusLabel($d['status']),
-    ])), strtolower($query));
-}));
-usort($visible, static fn(array $a, array $b): int => (($b['rack'] ?? 0) <=> ($a['rack'] ?? 0)) ?: (($b['unit'] ?? 0) <=> ($a['unit'] ?? 0)));
 
+// Nach der POST-Verarbeitung die aktuelle Statistik berechnen.
+require __DIR__ . '/monitoring.php';

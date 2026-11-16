@@ -1,9 +1,9 @@
 <section class="dashboard-panel" id="issues" aria-labelledby="incidents-heading">
     <div class="panel-heading">
-        <div><span class="section-overline">01 / STÖRUNGEN</span><h2 id="incidents-heading">Incidents</h2><p>Automatische und manuelle Meldungen inklusive Verlauf.</p></div>
+        <div><h2 id="incidents-heading">Incidents</h2></div>
         <nav class="incident-filters" aria-label="Incidents filtern">
             <?php foreach (['open' => 'Offen', 'resolved' => 'Gelöst', 'all' => 'Alle'] as $key => $label): ?>
-                <a href="index.php?incidents=<?= h($key) ?>#issues" class="incident-filter <?= $incidentFilter === $key ? 'active' : '' ?>" <?= $incidentFilter === $key ? 'aria-current="page"' : '' ?>><?= h($label) ?> <span><?= (int) $incidentCounts[$key] ?></span></a>
+                <a href="details.php?incidents=<?= h($key) ?>#issues" class="incident-filter <?= $incidentFilter === $key ? 'active' : '' ?>" <?= $incidentFilter === $key ? 'aria-current="page"' : '' ?>><?= h($label) ?> <span><?= (int) $incidentCounts[$key] ?></span></a>
             <?php endforeach; ?>
         </nav>
     </div>
@@ -39,5 +39,4 @@
             </tbody>
         </table>
     </div>
-    <p class="panel-footnote">Die letzten 200 Einträge · Zeitangaben: Europe/Vienna · Automatische Behebung nur nach erfolgreich abgeschlossenen Checks</p>
 </section>

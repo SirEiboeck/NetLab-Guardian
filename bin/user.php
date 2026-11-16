@@ -6,12 +6,12 @@ if (PHP_SAPI !== 'cli') {
     http_response_code(404);
     exit;
 }
-require __DIR__ . '/db_internal_api.php';
+require dirname(__DIR__) . '/db_internal_api.php';
 
 $username = trim((string) ($argv[1] ?? ''));
 $role = (string) ($argv[2] ?? 'admin');
 if ($username === '' || !preg_match('/^[a-zA-Z0-9_.-]{3,40}$/', $username) || !in_array($role, ['admin', 'viewer'], true)) {
-    fwrite(STDERR, "Aufruf: php setup.php BENUTZERNAME [admin|viewer]\n");
+    fwrite(STDERR, "Aufruf: php bin/user.php BENUTZERNAME [admin|viewer]\n");
     exit(1);
 }
 

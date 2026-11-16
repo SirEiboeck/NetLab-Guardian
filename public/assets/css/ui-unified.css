@@ -1,0 +1,207 @@
+/* Gemeinsame Gestaltung für Anmeldung, Verwaltung, Detailseiten und Racks. */
+:root {
+    --ui-bg: #10171e;
+    --ui-surface: #182129;
+    --ui-surface-soft: #1b2630;
+    --ui-border: #30404c;
+    --ui-text: #e7edf1;
+    --ui-muted: #9aadb9;
+    --ui-accent: #72bbcd;
+}
+body, .login-page { background: var(--ui-bg); color: var(--ui-text); }
+.app-content .workspace { padding-top: 27px; }
+.app-content .section-top { margin-bottom: 18px; }
+.app-content .panel, .dashboard-panel { box-shadow: none; border-color: var(--ui-border); background: var(--ui-surface); }
+.app-content .panel h2, .app-content .panel h3 { color: #edf3f5; }
+.app-footer { padding: 13px 0; }
+.app-topbar { min-height: 60px; }
+.sidebar-group-label { margin-top: 26px; }
+.sidebar-nav a { font-weight: 500; }
+.page-title-row { align-items: center; }
+.app-content .page-title-row h1 { margin: 0; }
+.back-link { display: inline-block; color: #95b9c6; font-size: 12px; text-decoration: none; margin-bottom: 9px; }
+.back-link:hover { color: #eaf5f8; }
+.dashboard-workspace { gap: 17px; }
+.dashboard-heading { margin-bottom: 0; }
+.dashboard-heading h1 { font-size: 27px; margin: 0; }
+.metric-grid { gap: 9px; }
+.metric { padding: 13px 15px; border-radius: 8px; }
+.metric strong { margin: 7px 0 0; font-size: 26px; }
+.panel-heading { padding: 15px 18px; gap: 10px; }
+.panel-heading h2 { margin: 0; font-size: 17px; }
+.dashboard-panel .data-table th { padding: 9px 12px; }
+.dashboard-panel .data-table td { padding: 10px 12px; }
+.app-content .admin-workspace { padding-top: 28px; }
+.admin-summary { margin: 10px 0 17px; gap: 9px; }
+.admin-summary > div { background: var(--ui-surface); border-color: var(--ui-border); border-radius: 8px; padding: 12px 14px; }
+.app-content .device-form label { color: #b8c9d1; }
+.app-content .device-form input, .app-content .device-form select, .app-content .device-form textarea,
+.login-page .device-form input { background: #111c25; color: #f0f4f7; border: 1px solid #415361; border-radius: 6px; }
+.app-content .admin-workspace table th, .app-content .device-issue-table th { text-align: left; }
+.app-content .admin-workspace table td, .app-content .admin-workspace table th { padding: 10px 13px; }
+.credentials-workspace .panel { margin-bottom: 16px; }
+.credentials-workspace .action-cell { flex-wrap: wrap; }
+
+/* Login: identisches Farbsystem, Brand und Formular-Stile wie die Anwendung. */
+.login-page { min-height: 100vh; }
+.login-page .login-shell {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 28px; background: var(--ui-bg);
+}
+.login-page .login-card {
+    width: min(420px, 100%); min-height: 0; margin: 0; padding: 30px;
+    border: 1px solid var(--ui-border); border-radius: 12px;
+    background: var(--ui-surface); display: block; box-shadow: 0 18px 42px rgba(0, 0, 0, .14);
+}
+.login-brand-header { display: flex; gap: 12px; align-items: center; padding-bottom: 22px; border-bottom: 1px solid var(--ui-border); }
+.login-brand-name { color: #eaf2f6; font-weight: 550; font-size: 17px; letter-spacing: -.3px; }
+.login-brand-name strong { font-weight: 700; }
+.login-brand-name small { display: block; color: var(--ui-muted); font-size: 11px; margin-top: 2px; }
+.login-page .login-card h1 { font-size: 25px; margin: 22px 0 20px; color: #f0f4f6; }
+.login-page .site-login-form { margin: 0; display: grid; gap: 16px; }
+.login-page .site-login-form label { color: #b6c8d1; display: block; font-size: 13px !important; }
+.login-page .site-login-form input { display: block; width: 100%; margin-top: 6px; padding: 11px 12px; font-size: 14px !important; }
+.login-page .site-login-form input:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.login-page .login-submit { margin-top: 4px; width: 100%; background: #2a6477; border: 1px solid #447485; color: #f5fbfd; border-radius: 7px; padding: 11px 15px; font-weight: 650; font-size: 13px; }
+.login-page .login-submit:hover { background: #31768b; }
+.login-page .notice { margin: -6px 0 16px; }
+
+/* Alle Rack-Karten immer nebeneinander und immer gleich hoch. */
+.rack-gallery { padding: 14px 16px 18px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 12px; }
+.rack-gallery .rack-card {
+    min-width: 0; width: 100%; margin: 0; display: flex; flex-direction: column;
+    background: #19252e; border: 1px solid var(--ui-border); border-radius: 9px; overflow: hidden;
+    box-shadow: none;
+}
+.rack-gallery .rack-heading { flex-direction: column; align-items: stretch; gap: 11px; padding: 14px 13px 12px; min-height: 100px; }
+.rack-gallery .rack-heading-title { display: flex; flex-direction: row; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+.rack-gallery .rack-heading h3 { font-size: 13px; font-weight: 650; line-height: 1.3; margin: 0; color: #eef5f8; }
+.rack-gallery .rack-actions, .rack-gallery .rack-actions form { width: 100%; }
+.rack-gallery .rack-actions form { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.rack-gallery .rack-run-button { min-height: 29px; padding: 5px 6px; border: 1px solid #476273; border-radius: 5px; background: #29495b; font-size: 11px !important; line-height: 1.25; white-space: normal; color: #d8eef4; }
+.rack-gallery .rack-run-button:hover { background: #365d71; }
+.rack-gallery .rack-run-scan { background: #243641; border-color: #3c5662; }
+.rack-gallery .rack-settings { margin: 0 13px 11px; position: static; }
+.rack-gallery .rack-settings > summary { width: auto; min-height: 26px; border: 0; background: none; color: #91b2be; font-size: 11px !important; padding: 0; display: inline-flex; justify-content: flex-start; }
+.rack-gallery .rack-settings > summary:hover { background: none; color: #eaf7fa; }
+.rack-gallery .rack-settings-panel { position: static; box-shadow: none; border-color: var(--ui-border); padding: 10px; background: #14202a; }
+.rack-gallery .rack-settings-panel label { font-size: 12px; }
+.rack-gallery .rack-settings-panel p { font-size: 11px; line-height: 1.4; }
+.rack-gallery .rack-settings-panel textarea { min-height: 150px; }
+.rack-gallery .rack-settings-buttons { flex-direction: column; align-items: stretch; }
+.rack-gallery .rack-reset-button { width: 100%; }
+.rack-gallery .rack-check-notice { margin: 0 12px 12px; padding: 10px; font-size: 12px; }
+.rack-gallery .rack-check-errors { padding-left: 14px; max-height: 170px; overflow: auto; }
+.rack-gallery .rack-frame { min-width: 0; width: auto; margin: 0 12px 12px; padding: 9px 11px 7px 24px; background: #111b22; border: 1px solid #344652; border-radius: 5px; box-shadow: none; }
+.rack-gallery .rack-frame::before, .rack-gallery .rack-frame::after { top: 8px; bottom: 8px; background: #304652; width: 2px; }
+.rack-gallery .rack-frame .device, .rack-gallery .rack-frame .empty-unit { height: 28px; min-height: 28px; margin: 0 0 3px; border-radius: 3px; box-sizing: border-box; }
+.rack-gallery .rack-frame .device { padding: 0 6px; gap: 5px; background: #263643; border: 1px solid #4c6070; transform: none; box-shadow: none; }
+.rack-gallery .rack-frame .device:hover { background: #2e4758; border-color: #70b5c6; transform: none; box-shadow: none; }
+.rack-gallery .rack-frame .device.warning { background: #3b3627; border-color: #8c7547; }
+.rack-gallery .rack-frame .device.critical { background: #462d34; border-color: #a36570; }
+.rack-gallery .rack-frame .device-name { max-width: 100%; min-width: 0; flex: 1 1 auto; font-size: 10px !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rack-gallery .rack-frame .device:hover .device-name { font-size: 10px !important; color: white; }
+.rack-gallery .rack-frame .empty-unit { background: #18242d; border: 1px dashed #2c3d48; display: flex; align-items: center; padding: 0 7px; color: #718997; font-size: 10px !important; }
+.rack-gallery .rack-frame .unit { color: #8195a1; font-size: 10px !important; right: calc(100% + 8px); }
+.rack-gallery .rack-frame .device:hover .unit { font-size: 10px !important; }
+.rack-gallery .rack-frame .ports { display: none; }
+.rack-gallery .rack-frame .note-marker { flex-shrink: 0; }
+.rack-gallery .rack-footer { padding: 6px 13px 11px; font-size: 10px !important; color: #94aab7; gap: 6px; flex-wrap: wrap; }
+.rack-gallery .rack-footer:last-child { margin-top: auto; }
+.rack-gallery .rack-footer b { color: #dbe7ed; }
+.rack-gallery .rack-footer .unpositioned-devices { display: flex; flex-wrap: wrap; gap: 5px; }
+.rack-empty { margin: 10px; }
+
+/* Tabellarische Gerätedetails. */
+.detail-workspace .page-title-row { margin-bottom: 17px; }
+.detail-workspace .panel { margin: 0 0 16px; padding: 0; overflow: hidden; }
+.detail-workspace .panel > .section-top { margin: 0; padding: 15px 18px; border-bottom: 1px solid var(--ui-border); }
+.detail-workspace .panel > .section-top h2 { margin: 0; font-size: 16px; }
+.detail-workspace .table-scroll { width: 100%; overflow-x: auto; }
+.detail-workspace table { width: 100%; border-collapse: collapse; background: none; }
+.detail-workspace .device-attribute-table th, .detail-workspace .device-attribute-table td {
+    text-align: left; font-size: 13px; line-height: 1.4; padding: 9px 18px; border-bottom: 1px solid #2b3c47;
+}
+.detail-workspace .device-attribute-table tr:last-child th, .detail-workspace .device-attribute-table tr:last-child td { border-bottom: 0; }
+.detail-workspace .device-attribute-table th { width: 220px; min-width: 160px; color: #99acb7; background: #1b2933; font-weight: 500; }
+.detail-workspace .device-attribute-table td { color: #edf2f5; }
+.detail-workspace .device-issue-table th { padding: 10px 12px; }
+.detail-workspace .device-issue-table td { padding: 10px 12px; }
+.detail-workspace .device-issue-table form { margin: 0; }
+.detail-workspace .detail-add-incident { padding: 12px 18px; border-top: 1px solid var(--ui-border); }
+.detail-workspace .detail-add-incident summary { font-size: 12px; font-weight: 600; color: #add1dc; cursor: pointer; }
+.detail-workspace .detail-add-incident .device-form { padding: 12px 0 0; }
+.detail-workspace .compact-note-form { padding: 14px 18px; }
+.detail-workspace .compact-note-form textarea { width: 100%; }
+.detail-workspace .notes-text { margin: 0; padding: 16px 18px; }
+.detail-workspace .dialog-actions { margin-bottom: 0; }
+@media (max-width: 1350px) {
+    .rack-gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 960px) {
+    .rack-gallery { grid-template-columns: 1fr; }
+    .rack-gallery .rack-heading { min-height: 0; }
+}
+@media (max-width: 600px) {
+    .login-page .login-shell { padding: 16px; }
+    .login-page .login-card { padding: 22px; }
+    .detail-workspace .device-attribute-table th { width: 40%; min-width: 130px; }
+    .rack-gallery { padding: 10px; }
+}
+
+
+/* Startseite: Statusverteilung ohne Inline-Skripte oder Inline-Styles. */
+.health-panel .panel-heading { border-bottom: 1px solid var(--ui-border); }
+.health-panel .health-count { color: #bfdce5; font-size: 12px; font-variant-numeric: tabular-nums; }
+.health-body { padding: 15px 18px 18px; }
+.health-bars { display: grid; gap: 13px; }
+.health-row { display: grid; grid-template-columns: minmax(155px, 210px) minmax(80px, 1fr) 72px; align-items: center; gap: 15px; font-size: 12px; }
+.health-row strong { text-align: right; color: #e6f0f3; font-size: 12px; font-variant-numeric: tabular-nums; }
+.health-label { display: flex; gap: 9px; align-items: center; white-space: nowrap; color: #d3e0e6; }
+.health-label small { margin-left: auto; color: #869fae; font-size: 11px; }
+.status-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 3px; flex-shrink: 0; }
+.status-swatch.healthy { background: #72bda2; }
+.status-swatch.warning { background: #d6ae6a; }
+.status-swatch.critical { background: #d8868d; }
+.status-swatch.unknown { background: #667d8d; }
+.health-progress { width: 100%; height: 10px; display: block; border: 0; border-radius: 4px; overflow: hidden; background: #263745; appearance: none; }
+.health-progress::-webkit-progress-bar { background: #263745; border-radius: 4px; }
+.health-progress::-webkit-progress-value { background: var(--progress-fill); border-radius: 4px; }
+.health-progress::-moz-progress-bar { background: var(--progress-fill); border-radius: 4px; }
+.health-progress.healthy { --progress-fill: #72bda2; }
+.health-progress.warning { --progress-fill: #d6ae6a; }
+.health-progress.critical { --progress-fill: #d8868d; }
+.health-progress.unknown { --progress-fill: #667d8d; }
+
+/* Gerätedaten können direkt in den Tabellenzellen bearbeitet werden. */
+.detail-workspace .editable-device-table input,
+.detail-workspace .editable-device-table select,
+.detail-workspace .editable-device-table textarea { display: block; width: 100%; min-width: 0; margin: 0; padding: 8px 10px; font-size: 13px; }
+.detail-workspace .editable-device-table textarea { resize: vertical; }
+.detail-workspace .editable-device-table td { width: 72%; }
+.detail-workspace .device-position-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.detail-workspace .device-editor-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 15px 18px; border-top: 1px solid var(--ui-border); }
+.detail-workspace .device-incident-actions { min-width: 160px; }
+.detail-workspace .device-incident-actions form { display: inline-flex; margin: 0 5px 0 0; }
+.detail-workspace .incident-delete-confirm { display: inline-block; vertical-align: middle; }
+.detail-workspace .incident-delete-confirm summary { cursor: pointer; font-size: 11px; color: #efa8ad; }
+.detail-workspace .incident-delete-confirm form { display: block; margin-top: 6px; }
+.detail-workspace .device-remove-panel { margin: 10px 0 22px; padding: 10px 15px; color: #a8b9c2; font-size: 12px; }
+.detail-workspace .device-remove-panel summary { cursor: pointer; }
+.detail-workspace .device-remove-panel form { display: flex; align-items: center; gap: 15px; padding: 10px 0; flex-wrap: wrap; }
+.detail-workspace .device-remove-panel p { margin: 0; }
+
+/* Schließbare Scan-Meldung. Der Button sendet eine reine Dismiss-Aktion. */
+.rack-gallery .rack-check-notice { position: relative; padding-right: 37px; }
+.rack-dismiss-form { position: absolute; top: 6px; right: 6px; margin: 0; }
+.rack-dismiss-form .notice-close { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: inherit; font-size: 20px; line-height: 1; cursor: pointer; }
+.rack-dismiss-form .notice-close:hover, .rack-dismiss-form .notice-close:focus-visible { background: rgba(255,255,255,.12); outline-offset: 2px; }
+@media (max-width: 700px) {
+    .health-row { grid-template-columns: minmax(90px, 1fr) minmax(80px, 1fr) 56px; gap: 8px; }
+    .health-label { flex-wrap: wrap; white-space: normal; }
+    .health-label small { display: none; }
+    .detail-workspace .editable-device-table th { min-width: 100px; }
+    .detail-workspace .device-position-fields { grid-template-columns: 1fr; }
+}
+
+.dashboard-heading-actions { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; }

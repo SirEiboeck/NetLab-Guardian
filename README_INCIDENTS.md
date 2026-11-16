@@ -55,7 +55,7 @@ Die Zahl hinter dem Regel-Code ist ein Hash des stabilen `Finding.key`, kein zuf
 
 ## Anzeige und Betrieb
 
-Auf der Startseite unter **Incidents** gibt es Filter für **Offen / Gelöst / Alle**. Die Tabelle zeigt Gerät/IP, Check, Meldung, Erkennungsdatum, zuletzt gesehen und Lösungsdatum. Jeder Filter zeigt höchstens 200 Einträge (mit Anzahl aller Einträge). Datum/Uhrzeit werden als Europe/Vienna dargestellt.
+Auf der Detailseite `details.php` unter **Incidents** gibt es Filter für **Offen / Gelöst / Alle**. Die Tabelle zeigt Gerät/IP, Check, Meldung, Erkennungsdatum, zuletzt gesehen und Lösungsdatum. Jeder Filter zeigt höchstens 200 Einträge (mit Anzahl aller Einträge). Die Datumswerte werden in der Oberfläche formatiert. Manuelle Incidents erhalten beim Anlegen explizit `detected_at` und `last_seen_at`, können vom Admin gelöst oder dauerhaft gelöscht werden. Automatische Check-Incidents bleiben als Historie erhalten.
 
 Für die Webansicht benötigt PHP `pdo_sqlite`, für echte Gerätechecks braucht Python `netmiko`. Nach einem Update des Python-Teils muss die Website mit der richtigen Python-Umgebung starten (`python_scripts/.venv/bin/python` oder `NETLAB_PYTHON`).
 
