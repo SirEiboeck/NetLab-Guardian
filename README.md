@@ -51,6 +51,19 @@ Die Website verwaltet globale Netzwerk-Credentials. Sie gelten für alle Geräte
 
 Die DataInterpreter-Checks können weiterhin über `@command_check(...)` ergänzt werden. Siehe [README_INCIDENTS.md](README_INCIDENTS.md).
 
+## Automatischer Incident-Bericht per E-Mail (SMTP)
+
+Ein Backend-Service verschickt **einmal täglich zur konfigurierten Uhrzeit** alle offenen
+Incidents nach Geräten gruppiert. Absender, Empfänger und SMTP-Server stehen in
+`config/incident_mail.php`; das **SMTP-/App-Passwort wird separat geschützt gespeichert**.
+Dafür brauchst du keine Microsoft-Entra-IDs. `install.sh` richtet systemd-Service und
+Timer mit `OnCalendar` für einen Start pro Tag automatisch ein; ohne gültige Konfiguration und hinterlegtes Passwort bleibt
+der Timer deaktiviert. Das Frontend ist unverändert. **Hinweis:** Der Mailanbieter
+muss SMTP-Passwort-Login zulassen; insbesondere bei Microsoft-365-Schulkonten ist
+diese Funktion oft gesperrt. Mit `sudo bash install.sh --test-mail` lässt sich direkt über die Kommandozeile
+eine separate SMTP-Testmail verschicken (ohne Incidents und ohne Einfluss auf den Timer).
+Siehe [README_MAIL.md](README_MAIL.md).
+
 ## Aktualisierung
 
 Vor dem Austausch `storage/inventory.sqlite` sichern. Dateien gemäß [DATEIPFADE.md](DATEIPFADE.md) übernehmen. Die **alte Datei `setup.php` im Projektstamm löschen**; ihre Aufgabe übernimmt bei der Installation `install.sh`, zur manuellen Passwortänderung `bin/user.php`.

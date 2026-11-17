@@ -1,0 +1,12 @@
+[Unit]
+Description=NetLab Guardian - taeglicher Incident-Mail-Versand
+
+[Timer]
+# Die Uhrzeit und Zeitzone werden von install.sh aus config/incident_mail.php eingesetzt.
+OnCalendar=__ON_CALENDAR__
+AccuracySec=30s
+Persistent=true
+Unit=netlab-incident-mail.service
+
+[Install]
+WantedBy=timers.target

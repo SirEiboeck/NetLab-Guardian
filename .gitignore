@@ -7,5 +7,9 @@
 /storage/*.sqlite-*
 /storage/*.sqlite.backup*
 /storage/*.lock
+/storage/incident_mail_last_sent.txt
+/storage/incident_mail_last_attempt.txt
+/config/incident_mail.php
 /backups/
 .env
+.idea

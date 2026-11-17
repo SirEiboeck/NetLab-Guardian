@@ -29,6 +29,7 @@ Der Installer erledigt in dieser Reihenfolge:
 4. Initialisiert die SQLite-Datenbank (falls sie fehlt) bzw. führt vorhandene Schema-Ergänzungen aus, **ohne Geräte/Incidents zu löschen**. Existiert die Datenbank, wird vor der Migration eine zusätzliche Datei `backups/inventory.sqlite.backup-ZEITSTEMPEL.ZUFALL` angelegt.
 5. Legt den Admin-Benutzer an und fragt das Passwort interaktiv und ohne Echo ab. Existiert der Admin schon, wird dessen Passwort **nicht** verändert; verwende zum Zurücksetzen `--reset-admin` oder später `php bin/user.php admin admin`.
 6. Prüft Lese- und Schreibrechte beider Benutzer auf die Datenbank, Schreibzugriff auf `storage/`, Leserechte der PHP-Dateien und den Start der `.venv` durch den Webserver-Benutzer. Bei einer fehlgeschlagenen Prüfung bricht der Installer mit Fehlerhinweis ab.
+7. Richtet zusätzlich den **Incident-Mail-Service** und den systemd-Timer ein. `config/incident_mail.php` wird nur bei Fehlen erzeugt, bestehende Zugangsdaten bleiben unangetastet. Ohne hinterlegte Microsoft-365-Zugangsdaten wird der Timer nicht aktiviert. Anleitung: [README_MAIL.md](README_MAIL.md).
 
 **Wichtig zum Backup:** Die automatisch angelegte Datei ist eine einfache Kopie. Bei Datenbankzugriffen während des Kopierens ist sie nicht garantiert konsistent. Vor einer größeren Aktualisierung die Website/Checks kurz anhalten oder ein konsistentes SQLite-Backup mit einem dafür geeigneten Backup-Verfahren erstellen. Bestehende DB-Dateien werden vom Installer nicht gelöscht. Das Backup enthält auch gespeicherte Zugangsdaten und ist unter `backups/` mit **0700** für das Verzeichnis und **0600** für die Datei vor dem Webserver geschützt.
 
@@ -74,6 +75,22 @@ Wenn `NETLAB_PYTHON` in der PHP-Serverumgebung gesetzt ist, überschreibt es die
 
 Siehe [DATEIPFADE.md](DATEIPFADE.md) für alle Upload-Zielpfade der neuen Dateien. `app/Database/db_internal_api.php` bleibt die eigentliche DB-Klasse, `db_internal_api.php` im Projektstamm nur der Kompatibilitäts-Loader.
 
+## Täglicher Incident-Mail-Service
+
+Beim normalen Aufruf von `install.sh` werden die Mail-Service-Dateien automatisch
+mit eingerichtet. In `config/incident_mail.php` SMTP-Server, Absender, Empfänger
+und tägliche Uhrzeit angeben. Das SMTP-/App-Passwort niemals in die Projektdatei
+schreiben, sondern getrennt über den Installer hinterlegen:
+
+```bash
+sudo bash install.sh --set-mail-password
+sudo bash install.sh --mail-only
+```
+
+Für die erste Einrichtung reicht `sudo bash install.sh`; der Timer bleibt ohne
+vollständige Angaben zunächst deaktiviert. Details zur SMTP-Konfiguration und
+den systemd-Units: [README_MAIL.md](README_MAIL.md).
+
 ## Update von der bisherigen Admin-Seite
 
 Beim Umstieg auf das neue visuelle Dashboard und die getrennten Detailtabellen müssen die folgenden veralteten Dateien manuell entfernt werden (ein Entpacken der ZIP löscht sie nicht automatisch):
@@ -84,3 +101,30 @@ rm -- public/admin.php app/Controllers/admin.php app/Views/pages/admin.php
 ```
 
 Die Geräteverwaltung ist danach über `public/device.php` erreichbar. `public/details.php` zeigt die Tabellen für Geräte und Incidents. Die Datenbank und die Python-Checks werden nicht geändert.
+
+
+## Sicherer SMTP-Incident-Mail-Versand
+
+Der optionale Incident-Mail-Service verschickt offene Incidents täglich über
+SMTP mit TLS und Passwort-Authentifizierung. Ein SMTP-Passwort bzw. App-Passwort
+wird **außerhalb des Projekts und geschützt** hinterlegt, nicht in der PHP-Datei.
+Einrichtung: `sudo bash install.sh --set-mail-password`. Für Microsoft-365-Schulkonten
+muss die Schul-IT die Passwort-SMTP-Anmeldung explizit erlauben; andernfalls
+ist diese Variante für das Postfach nicht verwendbar. Weitere Hinweise stehen in
+[README_MAIL.md](README_MAIL.md).
+
+## SMTP-Testmail per Kommandozeile
+
+Wenn `config/incident_mail.php` ausgefüllt, das SMTP-Passwort per
+`sudo bash install.sh --set-mail-password` gespeichert und die Dienste mit
+`sudo bash install.sh --mail-only` eingerichtet wurden, verschickst du eine
+separate Testmail mit:
+
+```bash
+sudo bash install.sh --test-mail
+```
+
+Die Testmail geht an alle konfigurierten Empfänger und enthält **keine Incidents**.
+Sie löst den Tagesbericht nicht aus und verändert seinen Versandstatus nicht.
+Bei Problemen findest du Details unter
+`sudo journalctl -u netlab-incident-mail-test.service -n 50 --no-pager`.

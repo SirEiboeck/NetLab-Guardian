@@ -1,0 +1,18 @@
+[Unit]
+Description=NetLab Guardian - manueller Incident-Bericht (Testversand)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=__APP_USER__
+WorkingDirectory=__PROJECT_ROOT__
+ExecStart=/usr/bin/php __PROJECT_ROOT__/bin/incident_mail.php --test-mail
+__CREDENTIAL_DIRECTIVE__
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__PROJECT_ROOT__/storage
+TimeoutStartSec=90
