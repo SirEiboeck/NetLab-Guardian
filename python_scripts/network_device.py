@@ -27,6 +27,9 @@ class NetworkDevice:
     def command(self, cmd):
         return self.connection.send_command(cmd)
 
+    def prompt(self):
+        return self.connection.find_prompt()
+
     def commands(self, cmds):
         # Kompatibel mit bisherigen Aufrufern.
         return {cmd: self.command(cmd) for cmd in cmds}

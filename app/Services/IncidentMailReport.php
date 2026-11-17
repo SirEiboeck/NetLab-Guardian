@@ -1,13 +1,17 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/IncidentMailCharts.php';
+require_once __DIR__ . '/IncidentMailHtml.php';
+require_once __DIR__ . '/../Support/helpers.php';
+
 /** Erstellt aus der bestehenden NetLab-SQLite-API einen täglichen Incident-Bericht. */
 final class IncidentMailReport
 {
     private const MAX_ISSUES = 10000;
 
-    /** @return array{subject:string,body:string,count:int,device_count:int} */
-    public static function fromDatabase(DBInternalAPI $db, DateTimeImmutable $now): array
+    /** @return array{subject:string,body:string,html:string,inline_images:array,count:int,device_count:int} */
+    public static function fromDatabase(DBInternalAPI $db, DateTimeImmutable $now, ?array $precheck = null): array
     {
         $openCount = (int) ($db->incidentCounts()['open'] ?? 0);
         if ($openCount > self::MAX_ISSUES) {
@@ -30,16 +34,30 @@ final class IncidentMailReport
             }
         }
 
-        return self::format($issues, $devices, $now);
+        // Die Website nutzt statusFor() für dieselbe Geräte-Statusübersicht.
+        $byDevice = [];
+        foreach ($issues as $issue) {
+            $byDevice[(int) $issue['device_id']][] = $issue;
+        }
+        $statusCounts = ['checked' => 0, 'warning' => 0, 'critical' => 0, 'unknown' => 0];
+        foreach ($db->all('device', ['removed_at' => null], 10000) as $device) {
+            $status = statusFor((int) $device['id'], $byDevice[(int) $device['id']] ?? [], $device['last_checked_at']);
+            $statusCounts[$status] = ($statusCounts[$status] ?? 0) + 1;
+        }
+        return self::format($issues, $devices, $now, [
+            'devices' => $statusCounts,
+            'incidents' => $db->incidentCounts(),
+            'precheck' => $precheck,
+        ]);
     }
 
     /**
      * Reine Formatierungsfunktion; unabhängig von Netzwerk und DB testbar.
      * @param array<int,array<string,mixed>> $issues
      * @param array<int,array<string,mixed>|null> $devices
-     * @return array{subject:string,body:string,count:int,device_count:int}
+     * @return array{subject:string,body:string,html:string,inline_images:array,count:int,device_count:int}
      */
-    public static function format(array $issues, array $devices, DateTimeImmutable $now): array
+    public static function format(array $issues, array $devices, DateTimeImmutable $now, array $stats = []): array
     {
         $groups = [];
         foreach ($issues as $issue) {
@@ -67,8 +85,21 @@ final class IncidentMailReport
             'Stand: ' . $now->format('d.m.Y H:i T'),
             'Offene Incidents: ' . $total,
             'Betroffene Geräte: ' . count($groups),
-            '',
         ];
+        if (is_array($stats['precheck'] ?? null)) {
+            $check = $stats['precheck'];
+            $statuses = $check['statuses'] ?? [];
+            $lines[] = 'Gerätecheck vor dem Versand: ' . (int) ($check['attempted'] ?? 0)
+                . '/' . (int) ($check['total'] ?? 0) . ' abgefragt';
+            $lines[] = 'Ergebnis: ' . (int) ($statuses['ok'] ?? 0) . ' OK, '
+                . (int) ($statuses['error'] ?? 0) . ' mit Fehlern, '
+                . (int) ($statuses['unreachable'] ?? 0) . ' nicht erreichbar, '
+                . (int) ($statuses['authentication_failed'] ?? 0) . ' Anmeldung fehlgeschlagen';
+            $lines[] = 'Nicht abgefragt: ' . (int) ($check['excluded'] ?? 0)
+                . ' gesperrt, ' . (int) ($check['invalid_ip'] ?? 0) . ' ohne gültige IP';
+        }
+        $lines[] = '';
+
 
         if ($total === 0) {
             $lines[] = 'Aktuell sind keine offenen Incidents vorhanden.';
@@ -106,7 +137,10 @@ final class IncidentMailReport
         }
 
         $lines[] = 'Automatisch erstellt von NetLab Guardian. Nicht auf diese E-Mail antworten.';
+        $visual = IncidentMailHtml::render($groups, $devices, $now, $stats);
         return [
+            'html' => $visual['html'],
+            'inline_images' => $visual['images'],
             'subject' => $subject,
             'body' => implode("\n", $lines) . "\n",
             'count' => $total,

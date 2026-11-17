@@ -12,7 +12,7 @@
             <thead><tr>
                 <th scope="col">Status</th><th scope="col">Gerät</th><th scope="col">Check / Quelle</th>
                 <th scope="col">Meldung</th><th scope="col">Erkannt</th><th scope="col">Zuletzt</th>
-                <th scope="col">Gelöst am</th><th scope="col"><span class="visually-hidden">Details</span></th>
+                <th scope="col">Gelöst am</th><th scope="col">Aktionen</th>
             </tr></thead>
             <tbody>
             <?php foreach ($incidents as $incident):
@@ -32,7 +32,29 @@
                     <td class="incident-date"><?= h(rackIncidentDate($incident['detected_at'])) ?></td>
                     <td class="incident-date"><?= h(rackIncidentDate($incident['last_seen_at'] ?: $incident['detected_at'])) ?></td>
                     <td class="incident-date"><?= h(rackIncidentDate($incident['resolved_at'])) ?></td>
-                    <td class="incident-link"><a href="device.php?id=<?= (int) $incident['device_id'] ?>" aria-label="<?= h($incident['device_name'] ?: 'Gerät') ?> öffnen">Details</a></td>
+                    <td class="incident-link">
+                        <div class="incident-direct-actions">
+                            <?php if (isAdmin() && $isOpen): ?>
+                                <form method="post" action="details.php#issues">
+                                    <input type="hidden" name="csrf" value="<?= h(csrf()) ?>">
+                                    <input type="hidden" name="action" value="resolve_issue">
+                                    <input type="hidden" name="issue_id" value="<?= (int) $incident['id'] ?>">
+                                    <input type="hidden" name="incidents" value="<?= h($incidentFilter) ?>">
+                                    <button type="submit" class="small-action incident-resolve-button" aria-label="Incident #<?= (int) $incident['id'] ?> lösen">Lösen</button>
+                                </form>
+                            <?php endif; ?>
+                            <?php if (isAdmin() && $incident['source_key'] === null && !str_starts_with((string) $incident['type'], 'Python-Check: ')): ?>
+                                <form method="post" action="details.php#issues" data-confirm="Diesen manuellen Incident wirklich dauerhaft löschen?">
+                                    <input type="hidden" name="csrf" value="<?= h(csrf()) ?>">
+                                    <input type="hidden" name="action" value="delete_issue">
+                                    <input type="hidden" name="issue_id" value="<?= (int) $incident['id'] ?>">
+                                    <input type="hidden" name="incidents" value="<?= h($incidentFilter) ?>">
+                                    <button type="submit" class="small-action incident-delete-button" aria-label="Incident #<?= (int) $incident['id'] ?> löschen">Löschen</button>
+                                </form>
+                            <?php endif; ?>
+                            <a href="device.php?id=<?= (int) $incident['device_id'] ?>#incidents" aria-label="<?= h($incident['device_name'] ?: 'Gerät') ?> öffnen">Details</a>
+                        </div>
+                    </td>
                 </tr>
             <?php endforeach; ?>
             <?php if (!$incidents): ?><tr><td colspan="8" class="empty-table"><?= $incidentFilter === 'open' ? 'Keine offenen Incidents vorhanden.' : ($incidentFilter === 'resolved' ? 'Noch keine gelösten Incidents vorhanden.' : 'Noch keine Incidents vorhanden.') ?></td></tr><?php endif; ?>

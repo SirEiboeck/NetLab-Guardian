@@ -37,7 +37,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($ip !== '' && !filter_var($ip, FILTER_VALIDATE_IP)) {
                     throw new RuntimeException('Ungültige Management-IP-Adresse.');
                 }
-                foreach (['model', 'serial_number', 'firmware', 'console_port', 'inventory_number'] as $field) {
+                foreach (['model', 'serial_number', 'firmware'] as $field) {
                     if (strlen($text($field)) > 120) {
                         throw new RuntimeException('Ein Gerätefeld ist zu lang (maximal 120 Zeichen).');
                     }
@@ -67,8 +67,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'firmware' => $nullable('firmware'),
                     'management_ip' => $ip === '' ? null : $ip,
                     'rack_position' => $position,
-                    'console_port' => $nullable('console_port'),
-                    'inventory_number' => $nullable('inventory_number'),
                     'notes' => $nullable('notes'),
                     'check_excluded' => (int) $exclusion,
                 ];

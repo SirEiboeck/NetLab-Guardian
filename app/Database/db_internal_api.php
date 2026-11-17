@@ -53,6 +53,11 @@ final class DBInternalAPI
         $addedLastSeen = false;
         foreach ([
             ['device', 'check_excluded', 'INTEGER NOT NULL DEFAULT 0 CHECK (check_excluded IN (0, 1))'],
+            ['device', 'discovered_hostname', 'TEXT'],
+            ['device', 'os_family', 'TEXT'],
+            ['device', 'uptime', 'TEXT'],
+            ['device', 'software_image', 'TEXT'],
+            ['device', 'last_discovered_at', 'TEXT'],
             ['issue', 'source_key', 'TEXT'],
             ['issue', 'last_seen_at', 'TEXT'],
         ] as [$table, $column, $definition]) {
@@ -70,6 +75,24 @@ final class DBInternalAPI
                 $fields = $this->db->query("PRAGMA table_info($table)")->fetchAll();
                 if (!in_array($column, array_column($fields, 'name'), true)) {
                     throw $error;
+                }
+            }
+        }
+        // Nicht automatisch ermittelbare Inventarfelder aus Alt-Datenbanken entfernen.
+        // SQLite >= 3.35 unterstützt DROP COLUMN; bei älteren Versionen
+        // keinen risikoreichen Tabellen-Neuaufbau im laufenden Webrequest ausführen.
+        foreach (['console_port', 'inventory_number'] as $obsoleteColumn) {
+            $existingColumns = array_column($this->db->query('PRAGMA table_info("device")')->fetchAll(), 'name');
+            if (!in_array($obsoleteColumn, $existingColumns, true)) continue;
+            try {
+                $this->db->exec('ALTER TABLE "device" DROP COLUMN "' . $obsoleteColumn . '"');
+            } catch (PDOException $error) {
+                $after = array_column($this->db->query('PRAGMA table_info("device")')->fetchAll(), 'name');
+                if (in_array($obsoleteColumn, $after, true)) {
+                    throw new RuntimeException(
+                        'Inventar-Migration benötigt SQLite 3.35+ (Spalte ' . $obsoleteColumn . ').',
+                        0, $error
+                    );
                 }
             }
         }

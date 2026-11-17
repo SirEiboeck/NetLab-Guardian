@@ -1,5 +1,5 @@
 [Unit]
-Description=NetLab Guardian - sofortiger Bericht über offene Incidents
+Description=NetLab Guardian - sofortiger Gerätecheck und anschließender Incident-Bericht
 Wants=network-online.target
 After=network-online.target
 
@@ -15,4 +15,4 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=__PROJECT_ROOT__/storage
-TimeoutStartSec=90
+TimeoutStartSec=45min

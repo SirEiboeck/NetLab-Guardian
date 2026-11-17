@@ -15,7 +15,7 @@
                 <?php foreach ($visible as $d): ?>
                 <tr>
                     <td><a class="table-primary-link" href="device.php?id=<?= (int) $d['id'] ?>"><?= h($d['hostname'] ?: 'Gerät ' . $d['id']) ?></a><?= trim((string) $d['notes']) !== '' ? ' <span class="has-note-tag" title="Notiz vorhanden">Notiz</span>' : '' ?></td>
-                    <td><?= h($d['model'] ?: $d['device_type'] ?: '—') ?></td>
+                    <td><strong><?= h($d['device_type'] ?: 'Unbekannt') ?></strong><?php if (trim((string) ($d['model'] ?? '')) !== ''): ?><small class="inventory-model-detail"><?= h($d['model']) ?></small><?php endif; ?></td>
                     <td class="mono-cell"><?= h($d['management_ip'] ?: '—') ?></td>
                     <td><?= h($d['rack_position'] ?: 'Nicht zugeordnet') ?></td>
                     <td><span class="pill <?= pillClass($d['status']) ?>"><?= h(statusLabel($d['status'])) ?></span><?php if ((int) ($d['check_excluded'] ?? 0) === 1): ?> <span class="pill neutral-pill">Ausgeschlossen</span><?php endif; ?></td>

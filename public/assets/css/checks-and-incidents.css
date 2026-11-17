@@ -169,3 +169,13 @@
 /* Eine Fehlermeldung pro Zeile statt eines langen Scan-Fehlertextes. */
 .rack-check-errors { margin: 10px 0 0; padding-left: 20px; }
 .rack-check-errors li { margin: 5px 0; line-height: 1.45; overflow-wrap: anywhere; }
+
+/* Direkte Incident-Aktionen in der Details-Tabelle */
+.incident-direct-actions { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+.incident-direct-actions form { margin:0; }
+.incident-direct-actions .small-action { cursor:pointer; border-radius:7px; padding:7px 10px; font:inherit; font-size:12px; font-weight:700; }
+.incident-direct-actions .incident-resolve-button { background:#193d36; color:#9cf0cf; border:1px solid #347b62; }
+.incident-direct-actions .incident-resolve-button:hover, .incident-direct-actions .incident-resolve-button:focus-visible { background:#285849; }
+.incident-direct-actions .incident-delete-button { background:#402329; color:#ffc1c6; border:1px solid #925562; }
+.incident-direct-actions .incident-delete-button:hover, .incident-direct-actions .incident-delete-button:focus-visible { background:#61323b; }
+.inventory-model-detail { display:block; margin-top:3px; color:var(--muted, #9cb4c2); font-size:12px; }

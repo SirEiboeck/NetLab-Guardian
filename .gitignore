@@ -11,5 +11,6 @@
 /storage/incident_mail_last_attempt.txt
 /config/incident_mail.php
 /backups/
+/.idea/
 .env
-.idea
+

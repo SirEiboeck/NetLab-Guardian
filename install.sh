@@ -13,6 +13,7 @@ RESET_ADMIN=0
 MAIL_ONLY=0
 SET_MAIL_PASSWORD=0
 TEST_MAIL=0
+CONFIGURE_MAIL=0
 
 usage() {
     cat <<'HELP'
@@ -24,8 +25,9 @@ Aufruf: sudo ./install.sh [Optionen]
   --reset-admin            Passwort des Admins erneut abfragen
   --skip-system-packages   Kein apt-get; vorhandene Pakete nur prüfen
   --check                  Nur Zugriffe/Abhängigkeiten überprüfen; nichts ändern
-  --mail-only              Nur Incident-Mail-Konfiguration und systemd-Timer einrichten
-  --test-mail              Aktuellen Incident-Bericht sofort senden (ohne Tagesstatus zu ändern)
+  --mail-only              Mail-Konfiguration und systemd-Timer übernehmen
+  --setup-mail             SMTP-Einrichtungsassistent (E-Mail, Empfänger, Zeit, Passwort)
+  --test-mail              Incident-Bericht aus der DB sofort senden, ohne Gerätecheck oder Tagesstatusänderung
   --set-mail-password      SMTP-Passwort verdeckt abfragen und geschützt speichern
   --set-mail-secret        Veralteter Alias für --set-mail-password
   --help                   Hilfe anzeigen
@@ -33,13 +35,16 @@ Beispiele:
   sudo ./install.sh --web-user www-data --app-user user --admin admin
   sudo ./install.sh --mail-only --app-user user --web-user www-data
   sudo ./install.sh --test-mail
+  sudo ./install.sh --setup-mail
 
 Der Installer erstellt python_scripts/.venv und prüft PHP-PDO-SQLite,
 Rechte sowie den Start des Python-Interpreters durch den Webserverbenutzer.
-Der tägliche Incident-Mail-Timer wird mit systemd OnCalendar automatisch eingerichtet. Beim ersten Lauf entsteht
+Der tägliche Incident-Mail-Timer startet zunächst die bestehenden Python-Gerätechecks
+für alle bekannten, freigegebenen Geräte und verschickt danach den aktualisierten Bericht. Beim ersten Lauf entsteht
 config/incident_mail.php; das SMTP-Passwort wird mit --set-mail-password separat
 verschlüsselt (sofern systemd-creds vorhanden ist) oder root-geschützt gespeichert.
-Nach Eintragen der übrigen Daten --mail-only ausführen.
+Beim ersten interaktiven Installationslauf bietet der Assistent die vollständige
+Mail-Einrichtung an. Später: --setup-mail, danach --test-mail.
 Bestehende Geräte und Incidents in storage/inventory.sqlite bleiben erhalten.
 HELP
 }
@@ -57,6 +62,7 @@ while (( $# )); do
         --skip-system-packages) SKIP_PACKAGES=1; shift ;;
         --check) CHECK_ONLY=1; shift ;;
         --mail-only) MAIL_ONLY=1; shift ;;
+        --setup-mail) CONFIGURE_MAIL=1; shift ;;
         --test-mail) TEST_MAIL=1; shift ;;
         --set-mail-password|--set-mail-secret) SET_MAIL_PASSWORD=1; shift ;;
         --help|-h) usage; exit 0 ;;
@@ -84,7 +90,7 @@ VENV_PY="$VENV/bin/python"
 
 as_app() { runuser -u "$APP_USER" -- "$@"; }
 as_web() { runuser -u "$WEB_USER" -- "$@"; }
-for f in schema.sql bin/user.php db_internal_api.php app/Database/db_internal_api.php app/Support/ProjectPaths.php public/index.php python_scripts/main.py python_scripts/requirements.txt; do
+for f in schema.sql bin/user.php db_internal_api.php app/Database/db_internal_api.php app/Controllers/incident_actions.php app/Support/ProjectPaths.php public/index.php python_scripts/main.py python_scripts/device_metadata.py python_scripts/requirements.txt; do
     need_file "$f"
 done
 [[ ! -L "$STORAGE" && ! -L "$DB" && ! -L "$VENV" ]] || fail 'storage/, SQLite-Datei oder .venv ist ein Symlink; bitte manuell prüfen.'
@@ -172,25 +178,117 @@ set_mail_password() {
     unset secret
 }
 
-# Mail ist optional; fehlende Credentials blockieren die restliche Installation nicht.
-setup_mail_service() {
-    say 'Richte täglichen Incident-Mail-Service ein'
-    for f in bin/incident_mail.php app/Services/IncidentMailSchedule.php app/Services/IncidentMailReport.php app/Services/SmtpMailer.php config/incident_mail.example.php systemd/netlab-incident-mail.service systemd/netlab-incident-mail-now.service systemd/netlab-incident-mail-test.service systemd/netlab-incident-mail.timer; do
-        need_file "$f"
-    done
-    command -v php >/dev/null 2>&1 || fail 'Für den Mail-Dienst ist PHP-CLI erforderlich.'
-    [[ ! -L "$ROOT/config" && ! -L "$ROOT/config/incident_mail.php" ]] || fail 'config/ oder incident_mail.php darf kein Symlink sein.'
+# Einrichtungsdialog: das Passwort wird NIE an PHP oder als Argument übergeben.
+# Mail-Konfiguration ist nur für Deploy-Benutzer lesbar, nicht für www-data.
+prepare_mail_config() {
+    [[ ! -L "$ROOT/config" && ! -L "$ROOT/config/incident_mail.php" ]] \
+        || fail 'config/ oder incident_mail.php darf kein Symlink sein.'
     mkdir -p -- "$ROOT/config"
     chown "$APP_USER:$WEB_GROUP" "$ROOT/config"
-    chmod 0700 "$ROOT/config"  # Zugangsdaten niemals für Webserver-Gruppe freigeben.
+    chmod 0700 "$ROOT/config"
     local conf="$ROOT/config/incident_mail.php"
     if [[ ! -e "$conf" ]]; then
         (umask 077; as_app cp -- "$ROOT/config/incident_mail.example.php" "$conf")
-        echo '  Mail-Konfigurationsdatei aus Vorlage erstellt.'
+        echo '  Mail-Konfiguration aus der Vorlage erstellt.'
     fi
-    [[ -f "$conf" ]] || fail "Keine reguläre Mail-Konfigurationsdatei: $conf"
+    [[ -f "$conf" ]] || fail "Keine reguläre Mail-Konfiguration: $conf"
     chown "$APP_USER:$WEB_GROUP" "$conf"
     chmod 0600 "$conf"
+}
+
+configure_mail_interactively() {
+    [[ -r /dev/tty && -w /dev/tty ]] || fail 'Mail-Einrichtung braucht ein interaktives Terminal.'
+    command -v php >/dev/null 2>&1 || fail 'PHP-CLI wird für die Mail-Einrichtung benötigt.'
+    say 'Interaktive SMTP-Einrichtung'
+    # Die PNG-Donuts nutzen eine freie Truetype-Schrift für glatte
+    # Mittelwerte. Fehlt sie, bleibt ein zeichensatzbasierter Fallback aktiv.
+    if [[ ! -r /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf \
+       && ! -r /usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf ]] \
+       && (( SKIP_PACKAGES == 0 )) && command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -- fonts-dejavu-core \
+            || echo '  WARNUNG: Keine TTF-Schrift vorhanden; Diagrammziffern nutzen Fallback.' >&2
+    fi
+    prepare_mail_config
+    local conf="$ROOT/config/incident_mail.php"
+    local sender recipient_string smtp_host smtp_port smtp_encryption smtp_username send_time timezone confirm
+    printf '  Deine vorhandene Mail-Konfiguration wird nur nach der letzten Bestätigung ersetzt.\n'
+    IFS= read -r -p 'Absender-E-Mail-Adresse: ' sender </dev/tty || fail 'Eingabe abgebrochen.'
+    IFS= read -r -p 'Empfänger (mehrere durch Komma trennen): ' recipient_string </dev/tty || fail 'Eingabe abgebrochen.'
+    IFS= read -r -p 'SMTP-Server [smtp.office365.com]: ' smtp_host </dev/tty || fail 'Eingabe abgebrochen.'
+    smtp_host="${smtp_host:-smtp.office365.com}"
+    IFS= read -r -p 'SMTP-Port [587]: ' smtp_port </dev/tty || fail 'Eingabe abgebrochen.'
+    smtp_port="${smtp_port:-587}"
+    IFS= read -r -p 'Verschlüsselung (starttls/ssl) [starttls]: ' smtp_encryption </dev/tty || fail 'Eingabe abgebrochen.'
+    smtp_encryption="${smtp_encryption:-starttls}"
+    IFS= read -r -p 'SMTP-Benutzername [gleich wie Absender]: ' smtp_username </dev/tty || fail 'Eingabe abgebrochen.'
+    smtp_username="${smtp_username:-$sender}"
+    IFS= read -r -p 'Tägliche Versandzeit (HH:MM) [07:00]: ' send_time </dev/tty || fail 'Eingabe abgebrochen.'
+    send_time="${send_time:-07:00}"
+    IFS= read -r -p 'Zeitzone [Europe/Vienna]: ' timezone </dev/tty || fail 'Eingabe abgebrochen.'
+    timezone="${timezone:-Europe/Vienna}"
+    # Keine Passwörter in der Konfiguration oder PHP-Prozessliste! Nur harmlose
+    # SMTP-Einstellungen werden als Argumente an PHP übergeben.
+    local php_source
+    php_source='require $argv[1]; require $argv[2];
+    $data = ["timezone"=>$argv[4],"send_time"=>$argv[5],
+      "smtp_host"=>$argv[6],"smtp_port"=>$argv[7],"smtp_encryption"=>$argv[8],
+      "sender"=>$argv[9],"smtp_username"=>$argv[10],
+      "recipients"=>array_values(array_filter(array_map("trim",explode(",",$argv[11]))))];
+    try { $data = SmtpMailer::validateConfig($data,false); }
+    catch (Throwable $e) { fwrite(STDERR, "Ungültige Eingabe: ".$e->getMessage()."\n"); exit(1); }
+    $tmp = tempnam(dirname($argv[3]),".incident-mail-");
+    if ($tmp === false) { fwrite(STDERR,"Konnte Konfiguration nicht schreiben.\n"); exit(1); }
+    chmod($tmp,0600);
+    $php = "<?php\ndeclare(strict_types=1);\n\n// SMTP-Zugang: Passwort nur unter /etc/netlab-guardian (systemd).\nreturn ".var_export($data,true).";\n";
+    if (file_put_contents($tmp,$php) === false || !rename($tmp,$argv[3])) {
+      @unlink($tmp); fwrite(STDERR,"Konnte Konfiguration nicht aktualisieren.\n"); exit(1);
+    }'
+    if ! as_app php -r "$php_source" "$ROOT/app/Services/IncidentMailSchedule.php" \
+        "$ROOT/app/Services/SmtpMailer.php" "$conf" "$timezone" "$send_time" \
+        "$smtp_host" "$smtp_port" "$smtp_encryption" "$sender" "$smtp_username" "$recipient_string"; then
+        echo '  Keine Einstellungen gespeichert. Bitte --setup-mail erneut ausführen.' >&2
+        return 1
+    fi
+    chown "$APP_USER:$WEB_GROUP" "$conf"
+    chmod 0600 "$conf"
+    echo '  SMTP-Einstellungen gespeichert. Das Passwort kommt separat unter /etc/netlab-guardian.'
+    IFS= read -r -p 'SMTP-Passwort jetzt sicher hinterlegen? [J/n]: ' confirm </dev/tty || fail 'Eingabe abgebrochen.'
+    if [[ ! "$confirm" =~ ^[nN]$ ]]; then
+        set_mail_password
+    else
+        echo '  Passwort später setzen: sudo bash install.sh --set-mail-password'
+    fi
+}
+
+# Mail ist optional; fehlende Credentials blockieren die restliche Installation nicht.
+setup_mail_service() {
+    say 'Richte täglichen Incident-Mail-Service ein'
+    for f in bin/incident_mail.php app/Services/IncidentMailDeviceCheck.php app/Services/IncidentMailSchedule.php app/Services/IncidentMailReport.php app/Services/SmtpMailer.php app/Checks/bootstrap.php python_scripts/main.py config/incident_mail.example.php systemd/netlab-incident-mail.service systemd/netlab-incident-mail-now.service systemd/netlab-incident-mail-test.service systemd/netlab-incident-mail.timer; do
+        need_file "$f"
+    done
+    command -v php >/dev/null 2>&1 || fail 'Für den Mail-Dienst ist PHP-CLI erforderlich.'
+    # Auch bei Updates mit --mail-only Outlook-kompatible PNGs ermöglichen.
+    if ! php -r 'exit(function_exists("imagecreatetruecolor") ? 0 : 1);' && (( SKIP_PACKAGES == 0 )) && command -v apt-get >/dev/null 2>&1; then
+        local gd_version gd_package
+        gd_version="$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;')"
+        gd_package=php-gd
+        if command -v apt-cache >/dev/null 2>&1 && apt-cache show "php${gd_version}-gd" >/dev/null 2>&1; then
+            gd_package="php${gd_version}-gd"
+        fi
+        if ! DEBIAN_FRONTEND=noninteractive apt-get install -y -- "$gd_package"; then
+            echo '  WARNUNG: PHP-GD fehlt; Diagramme werden durch Kennzahlen und Legenden ersetzt.' >&2
+        fi
+    fi
+    # Die PNG-Donuts nutzen eine freie Truetype-Schrift für glatte
+    # Mittelwerte. Fehlt sie, bleibt ein zeichensatzbasierter Fallback aktiv.
+    if [[ ! -r /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf \
+       && ! -r /usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf ]] \
+       && (( SKIP_PACKAGES == 0 )) && command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -- fonts-dejavu-core \
+            || echo '  WARNUNG: Keine TTF-Schrift vorhanden; Diagrammziffern nutzen Fallback.' >&2
+    fi
+    prepare_mail_config
+    local conf="$ROOT/config/incident_mail.php"
 
     if ! command -v systemctl >/dev/null 2>&1 || [[ ! -d /run/systemd/system ]]; then
         echo '  Hinweis: systemd nicht aktiv; Mail-Service-Dateien vorhanden, Timer manuell installieren.'
@@ -243,12 +341,17 @@ setup_mail_service() {
     systemctl daemon-reload
     systemctl enable --now netlab-incident-mail.timer
     systemctl restart netlab-incident-mail.timer
-    echo "  Incident-Mail-Timer aktiviert: $calendar (1x täglich; systemd OnCalendar)."
+    echo "  Incident-Mail-Timer aktiviert: $calendar (1x täglich; erst Gerätecheck, dann Bericht)."
 }
 
 if (( CHECK_ONLY )); then
     check_install
     exit $?
+fi
+if (( CONFIGURE_MAIL )); then
+    configure_mail_interactively
+    setup_mail_service
+    exit 0
 fi
 if (( SET_MAIL_PASSWORD )); then
     set_mail_password
@@ -256,6 +359,9 @@ if (( SET_MAIL_PASSWORD )); then
     exit 0
 fi
 if (( MAIL_ONLY )); then
+    if [[ ! -f "$ROOT/config/incident_mail.php" && -t 0 && -r /dev/tty ]]; then
+        configure_mail_interactively
+    fi
     setup_mail_service
     exit 0
 fi
@@ -267,7 +373,7 @@ if (( TEST_MAIL )); then
         echo '  Testmail-Dienst fehlt; installiere zuerst die Mail-Units.'
         setup_mail_service
     fi
-    say 'Sende den aktuellen Incident-Bericht sofort an die konfigurierten Empfänger'
+    say 'Sende den Incident-Bericht aus der Datenbank sofort (ohne Gerätecheck)'
     if ! systemctl start netlab-incident-mail-test.service; then
         journalctl -u netlab-incident-mail-test.service -n 15 --no-pager --output=cat >&2 || true
         fail 'Manueller Incident-Bericht fehlgeschlagen. Datenbank, SMTP-Einstellungen, Passwort und Anbieterfreigabe prüfen.'
@@ -307,6 +413,21 @@ if ! php_has_sqlite; then
         install_packages php-sqlite3
     fi
     php_has_sqlite || fail 'pdo_sqlite fehlt weiterhin im CLI-PHP. php --ini / php -m prüfen.'
+fi
+# Statische PNG-Donuts für Outlook: SVG/CSS-Charts werden von klassischen
+# Outlook-Clients nicht zuverlässig dargestellt. PHP-GD wird für PNGs genutzt.
+if ! php -r 'exit(function_exists("imagecreatetruecolor") ? 0 : 1);'; then
+    if (( SKIP_PACKAGES == 0 )); then
+        version="$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;')"
+        if command -v apt-cache >/dev/null 2>&1 && apt-cache show "php${version}-gd" >/dev/null 2>&1; then
+            install_packages "php${version}-gd"
+        else
+            install_packages php-gd
+        fi
+    fi
+    if ! php -r 'exit(function_exists("imagecreatetruecolor") ? 0 : 1);'; then
+        echo '  WARNUNG: PHP-GD nicht verfügbar; HTML-Mail nutzt statt Donut-PNGs Text/Kennzahlen.' >&2
+    fi
 fi
 if command -v dpkg-query >/dev/null 2>&1 && ! dpkg-query -W -f='${Status}' python3-venv 2>/dev/null | grep -q 'install ok installed'; then
     if (( SKIP_PACKAGES == 0 )); then install_packages python3-venv; fi
@@ -372,6 +493,15 @@ else
     say "Admin '$ADMIN_USER' existiert bereits – Kennwort bleibt unverändert (--reset-admin zum Ändern)."
 fi
 check_install || fail 'Mindestens eine Rechte-/Umgebungsprüfung ist fehlgeschlagen.'
+if [[ -t 0 && -r /dev/tty && ! -f "$ROOT/config/incident_mail.php" ]]; then
+    echo
+    echo '  Der SMTP-Assistent kann jetzt Absender, Empfänger, Uhrzeit und Passwort einrichten.'
+    mail_answer=''
+    IFS= read -r -p 'Mail-Service jetzt einrichten? [J/n]: ' mail_answer </dev/tty || true
+    if [[ ! "$mail_answer" =~ ^[nN]$ ]]; then
+        configure_mail_interactively
+    fi
+fi
 setup_mail_service
 say 'Installation abgeschlossen. DocumentRoot muss auf public/ zeigen.'
 echo "Web-Adresse / DocumentRoot: $ROOT/public"

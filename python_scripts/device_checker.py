@@ -16,6 +16,7 @@ from netmiko.exceptions import (
 
 from network_device import NetworkDevice
 from data_interpreter import DataInterpreter
+from device_metadata import extract_device_metadata
 
 
 def _issue(command: str, code: str, message: str, details: str) -> dict:
@@ -80,6 +81,38 @@ class DeviceChecker:
                                 error,
                             ))
 
+                    # Inventardaten mit derselben Netmiko-Sitzung lesen. Diese
+                    # Zusatzabfragen dürfen keine Diagnose-Incidents erzeugen,
+                    # falls ein Modell den Befehl nicht unterstützt.
+                    metadata_outputs = dict(outputs)
+                    for metadata_command in ("show version", "show inventory"):
+                        if metadata_command not in metadata_outputs:
+                            try:
+                                metadata_outputs[metadata_command] = connection.command(metadata_command)
+                            except Exception:
+                                # Optionaler Inventarbefehl, vorhandene Checks bleiben gültig.
+                                pass
+                    try:
+                        prompt = connection.prompt()
+                    except Exception:
+                        prompt = ""
+                    metadata = extract_device_metadata(metadata_outputs, prompt)
+                    # Zusatzbefehle nur dann abfragen, wenn die Standardausgabe
+                    # kein eindeutiges Chassis-Modell bzw. keine Seriennummer liefert.
+                    # Fehlende Berechtigungen dürfen den eigentlichen Check nicht stören.
+                    if not metadata.get("serial_number") and "show license udi" not in metadata_outputs:
+                        try:
+                            metadata_outputs["show license udi"] = connection.command("show license udi")
+                            metadata = extract_device_metadata(metadata_outputs, prompt)
+                        except Exception:
+                            pass
+                    if (not metadata.get("model") or not metadata.get("device_type")) and "show platform" not in metadata_outputs:
+                        try:
+                            metadata_outputs["show platform"] = connection.command("show platform")
+                            metadata = extract_device_metadata(metadata_outputs, prompt)
+                        except Exception:
+                            pass
+
                     try:
                         diagnostics = DataInterpreter(outputs).interpret()
                     except Exception as error:
@@ -92,6 +125,7 @@ class DeviceChecker:
                                 "Interne Cisco-Auswertung fehlgeschlagen", error,
                             )],
                             "evaluated_commands": [],
+                            "metadata": metadata,
                         }
 
                     if command_errors:
@@ -107,7 +141,9 @@ class DeviceChecker:
                             f"{len(diagnostics['issues'])} Auffälligkeit(en) oder "
                             "Befehlsfehler erkannt"
                         )
-                    # Keine Passwörter im Geräteergebnis zurückgeben.
+                    # Nur erkannte Geräteattribute, niemals CLI-Rohdaten oder
+                    # Kennwörter an PHP zurückgeben.
+                    diagnostics["metadata"] = metadata
                     return diagnostics
 
             except NetmikoAuthenticationException:

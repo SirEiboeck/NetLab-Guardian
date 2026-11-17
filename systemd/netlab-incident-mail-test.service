@@ -1,5 +1,5 @@
 [Unit]
-Description=NetLab Guardian - manueller Incident-Bericht (Testversand)
+Description=NetLab Guardian - manueller Incident-Bericht aus dem DB-Stand (ohne Gerätecheck)
 Wants=network-online.target
 After=network-online.target
 
@@ -15,4 +15,4 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=__PROJECT_ROOT__/storage
-TimeoutStartSec=90
+TimeoutStartSec=45min

@@ -58,10 +58,11 @@ Incidents nach Geräten gruppiert. Absender, Empfänger und SMTP-Server stehen i
 `config/incident_mail.php`; das **SMTP-/App-Passwort wird separat geschützt gespeichert**.
 Dafür brauchst du keine Microsoft-Entra-IDs. `install.sh` richtet systemd-Service und
 Timer mit `OnCalendar` für einen Start pro Tag automatisch ein; ohne gültige Konfiguration und hinterlegtes Passwort bleibt
-der Timer deaktiviert. Das Frontend ist unverändert. **Hinweis:** Der Mailanbieter
+der Timer deaktiviert. **Hinweis:** Der Mailanbieter
 muss SMTP-Passwort-Login zulassen; insbesondere bei Microsoft-365-Schulkonten ist
 diese Funktion oft gesperrt. Mit `sudo bash install.sh --test-mail` lässt sich direkt über die Kommandozeile
-eine separate SMTP-Testmail verschicken (ohne Incidents und ohne Einfluss auf den Timer).
+der vollständige Incident-Bericht aus dem gespeicherten Datenbankstand verschicken
+(ohne erneuten Gerätecheck und ohne Einfluss auf den Timer).
 Siehe [README_MAIL.md](README_MAIL.md).
 
 ## Aktualisierung
@@ -87,3 +88,30 @@ Formularaktionen auf den Verwaltungsseiten werden bei aktiviertem JavaScript ohn
 Bei Formularaktionen im Dashboard wurde vorher nach dem POST automatisch einem Redirect auf `index.php` gefolgt. Je nach Webserver-Konfiguration kann das zu HTTP 404 führen, selbst wenn der POST bereits verarbeitet wurde. Der aktuelle JavaScript-/PHP-Ablauf verwendet die erreichbare Seitenadresse für den POST und einen separaten AJAX-Redirect-Header (`X-NetLab-Redirect`). Dadurch lässt sich der Inhalt ohne Seiten- und Scrollsprung aktualisieren; eine Aktion wird bei einem 404 nicht automatisch erneut gesendet. Ohne JavaScript bleiben reguläre Formulare erhalten. Die SVG-Donuts sind als kompakte Statuskarten gestaltet.
 
 **Dateipfade für das Update:** siehe `DATEIPFADE.md`.
+
+### Automatische Gerätedaten und täglicher HTML-Mailbericht
+
+Beim Rack-Check liest Python zusätzlich `show version` und `show inventory`
+über die vorhandene Netmiko-Verbindung und aktualisiert, soweit erkennbar,
+Hostname, Firmware, Modell und Seriennummer im Inventar. Auf der Geräte- und Incident-Seite werden die neuen Angaben sowie direkte Aktionsbuttons angezeigt.
+Das bisherige Incident-System bleibt erhalten. Der SMTP-Mailservice versendet
+jetzt HTML-Berichte mit Outlook-kompatiblen Donut-PNGs und einer Incident-Tabelle.
+
+Die Mailfunktion kann direkt im interaktiven `sudo bash install.sh` eingerichtet
+werden; später erneut mit `sudo bash install.sh --setup-mail`. Der manuelle
+Versand desselben Berichts erfolgt über `sudo bash install.sh --test-mail`.
+Details: `README_MAIL.md` und `README_INCIDENTS.md`.
+
+### Neues Inventar und direkte Incident-Verwaltung
+
+Der Python-Check liest zusätzlich `show license udi` und `show platform`,
+wenn Modell, Seriennummer oder Geräteklasse nicht anhand von `show version`
+und `show inventory` erkannt werden können. Die Geräteklasse unterscheidet
+**Switch / Router / Sonstiges / Unbekannt**. Die Felder Konsolenport und
+Inventarnummer sind aus SQLite und Geräteansicht entfernt. Beim ersten Zugriff
+auf bestehende Datenbanken migriert die DB-Klasse das Schema (SQLite 3.35+);
+davor eine Sicherung der Datenbank erstellen.
+
+Auf `details.php` lassen sich offene Incidents jetzt direkt mit **Lösen**
+abschließen. Manuelle Incidents können dort zusätzlich gelöscht werden;
+automatische Incidents bleiben in der Check-Historie.

@@ -6,13 +6,11 @@ $unitSelected = array_key_exists('unit', $edit) ? (string) $edit['unit'] : (stri
 $editing = $isNew || ($error !== '' && (string) ($_POST['action'] ?? '') === 'save_device') || (string) ($_GET['edit'] ?? '') === '1';
 $values = [
     'Hostname' => ['hostname', 80],
-    'Gerätetyp' => ['device_type', 80],
+    'Geräteklasse' => ['device_type', 80],
     'Modell' => ['model', 120],
     'Management-IP' => ['management_ip', 45],
     'Seriennummer' => ['serial_number', 120],
     'Firmware' => ['firmware', 120],
-    'Konsolenport' => ['console_port', 120],
-    'Inventarnummer' => ['inventory_number', 120],
 ];
 ?>
 <main class="workspace detail-workspace">
@@ -54,13 +52,34 @@ $values = [
                         <div class="attribute-content" title="<?= h($value) ?>">
                             <span class="device-read-value"><?= h($value !== '' ? $value : '—') ?></span>
                             <?php if (isAdmin()): ?><span class="device-editor">
-                                <input id="field-<?= h($field) ?>" name="<?= h($field) ?>" maxlength="<?= $max ?>"
-                                       aria-label="<?= h($label) ?>" value="<?= h($value) ?>"
-                                       <?= $required ? 'required' : '' ?> <?= !$editing ? 'disabled' : '' ?>>
+                                <?php if ($field === 'device_type'): ?>
+                                    <select id="field-device_type" name="device_type" aria-label="Geräteklasse"
+                                            required <?= !$editing ? 'disabled' : '' ?>>
+                                        <?php foreach (array_unique(['Unbekannt', 'Switch', 'Router', 'Sonstiges', $value]) as $option): ?>
+                                            <option value="<?= h($option) ?>" <?= $value === $option ? 'selected' : '' ?>><?= h($option) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                <?php else: ?>
+                                    <input id="field-<?= h($field) ?>" name="<?= h($field) ?>" maxlength="<?= $max ?>"
+                                           aria-label="<?= h($label) ?>" value="<?= h($value) ?>"
+                                           <?= $required ? 'required' : '' ?> <?= !$editing ? 'disabled' : '' ?>>
+                                <?php endif; ?>
                             </span><?php endif; ?>
                         </div>
                     </td></tr>
                 <?php endforeach; ?>
+                <?php if (!$isNew): ?>
+                    <?php foreach ([
+                        'Erkannter Hostname' => 'discovered_hostname',
+                        'Betriebssystem' => 'os_family',
+                        'Laufzeit' => 'uptime',
+                        'System-Image' => 'software_image',
+                    ] as $label => $field): ?>
+                        <tr><th scope="row"><?= h($label) ?></th>
+                            <td><span class="attribute-static-value"><?= h(($device[$field] ?? '') ?: '—') ?></span></td></tr>
+                    <?php endforeach; ?>
+                    <tr><th scope="row">Letzte Inventarisierung</th><td><span class="attribute-static-value"><?= h(rackIncidentDate($device['last_discovered_at'] ?? null)) ?></span></td></tr>
+                <?php endif; ?>
                 <tr><th scope="row">Rack / HE</th><td>
                     <div class="attribute-content" title="<?= h((string) ($edit['rack_position'] ?? '')) ?>">
                         <span class="device-read-value"><?= h(($edit['rack_position'] ?? '') ?: '—') ?></span>

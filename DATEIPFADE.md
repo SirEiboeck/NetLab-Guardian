@@ -28,3 +28,23 @@ Es müssen **keine alten Dateien entfernt** und **keine Datenbankmigration** aus
 ## Technische Änderung
 
 Die PHP-Funktion `redirect()` antwortet bei AJAX-POSTs mit `204 No Content` und dem Header `X-NetLab-Redirect`. So wird keine möglicherweise falsche Weiterleitungsadresse automatisch abgerufen, nachdem der POST bereits ausgeführt wurde. Normale Formulare ohne JavaScript behalten das bisherige HTTP-303-Verhalten. Der Browser lädt nur die aktualisierte HTML-Ansicht über die tatsächlich funktionierende Seitenadresse nach, ohne Sprung zum Anker. Fehlerhinweise werden pro Rack nicht mehr gestapelt.
+
+### Erweiterte Backend-Dienste
+
+- `python_scripts/device_metadata.py` – Cisco-Geräteinventar aus `show version`/`show inventory`.
+- `app/Services/IncidentMailHtml.php` – Outlook-kompatible HTML-Mail im Dashboard-Stil.
+- `app/Services/IncidentMailCharts.php` – eingebettete PNG-Donutdiagramme über PHP-GD.
+- `install.sh --setup-mail` – interaktive SMTP-Konfiguration ohne Passwort im Projekt.
+
+## Diese Version: Geräteklasse und Incident-Aktionen
+
+- `python_scripts/device_metadata.py`: erweitert das Auslesen von Cisco-Hardwaredaten.
+- `python_scripts/device_checker.py`: ergänzende Abfragen auf noch fehlende Werte.
+- `app/Checks/IncidentResults.php`: übernimmt Geräteklasse Switch/Router/Sonstiges.
+- `schema.sql` und `app/Database/db_internal_api.php`: entfernen die nicht automatisch ermittelbaren Felder `console_port` und `inventory_number` bei Neu- und Bestandsdatenbanken.
+- `app/Controllers/incident_actions.php` und `public/details.php`: direkte Incident-Aktionen mit Admin- und CSRF-Prüfung.
+- `app/Views/dashboard/incidents.php` und `public/assets/js/interface.js`: Buttons zum Lösen und für das Löschen manueller Incidents.
+- `app/Views/pages/device.php`: Geräteklasse und zusätzliche erkannte Daten.
+- `app/Services/IncidentMailCharts.php` und `IncidentMailHtml.php`: dunkler Bericht mit antialiaster, hochauflösender PNG-Grafik.
+
+Es ist keine Installation zusätzlicher JavaScript-Libraries erforderlich.

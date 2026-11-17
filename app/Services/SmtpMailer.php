@@ -61,7 +61,7 @@ final class SmtpMailer
         return $config;
     }
 
-    public function send(string $subject, string $body): void
+    public function send(string $subject, string $body, ?string $html = null, array $inlineImages = []): void
     {
         $config = self::validateConfig($this->config);
         if (str_contains($subject, "\r") || str_contains($subject, "\n")) {
@@ -127,12 +127,43 @@ final class SmtpMailer
                 'Subject: ' . self::mimeSubject($subject),
                 'Date: ' . date('r'),
                 'MIME-Version: 1.0',
-                'Content-Type: text/plain; charset=UTF-8',
-                'Content-Transfer-Encoding: quoted-printable',
                 'Auto-Submitted: auto-generated',
             ];
-            $encodedBody = quoted_printable_encode(str_replace(["\r\n", "\r"], "\n", $body));
-            $message = implode("\r\n", $headers) . "\r\n\r\n" . $encodedBody;
+            $normalize = static fn(string $s): string => str_replace(["\r\n", "\r"], "\n", $s);
+            if ($html !== null) {
+                // multipart/related enthält eine text/plain + text/html Alternative
+                // und statische PNGs per Content-ID (auch ohne externe Bild-URLs).
+                $related = 'netlab-rel-' . bin2hex(random_bytes(12));
+                $alternative = 'netlab-alt-' . bin2hex(random_bytes(12));
+                $headers[] = 'Content-Type: multipart/related; boundary="' . $related . '"';
+                $content = '--' . $related . "\r\n"
+                    . 'Content-Type: multipart/alternative; boundary="' . $alternative . '"' . "\r\n\r\n"
+                    . '--' . $alternative . "\r\nContent-Type: text/plain; charset=UTF-8\r\n"
+                    . "Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+                    . quoted_printable_encode($normalize($body)) . "\r\n"
+                    . '--' . $alternative . "\r\nContent-Type: text/html; charset=UTF-8\r\n"
+                    . "Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+                    . quoted_printable_encode($normalize($html)) . "\r\n"
+                    . '--' . $alternative . "--\r\n";
+                foreach ($inlineImages as $image) {
+                    $cid = $image['cid'] ?? null;
+                    $data = $image['data'] ?? null;
+                    if (!is_string($cid) || !preg_match('/^[A-Za-z0-9_.@-]{1,120}$/D', $cid) ||
+                        ($image['mime'] ?? null) !== 'image/png' || !is_string($data) || strlen($data) > 2000000) {
+                        throw new InvalidArgumentException('Ungültige Inline-Grafik für HTML-Mail.');
+                    }
+                    $content .= '--' . $related . "\r\n"
+                        . "Content-Type: image/png\r\nContent-Transfer-Encoding: base64\r\n"
+                        . 'Content-ID: <' . $cid . ">\r\nContent-Disposition: inline\r\n\r\n"
+                        . chunk_split(base64_encode($data), 76, "\r\n");
+                }
+                $content .= '--' . $related . "--\r\n";
+            } else {
+                $headers[] = 'Content-Type: text/plain; charset=UTF-8';
+                $headers[] = 'Content-Transfer-Encoding: quoted-printable';
+                $content = quoted_printable_encode($normalize($body));
+            }
+            $message = implode("\r\n", $headers) . "\r\n\r\n" . $content;
             // SMTP DATA: CRLF und Punkt-Stuffing, damit kein Text eine SMTP-Sequenz auslöst.
             $message = str_replace(["\r\n", "\r"], "\n", $message);
             $message = str_replace("\n", "\r\n", $message);

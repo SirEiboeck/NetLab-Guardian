@@ -12,8 +12,8 @@ $bodyClass = (string) ($bodyClass ?? '');
     <meta name="theme-color" content="#101820">
     <meta name="description" content="NetLab Guardian – Inventar, Netzwerkchecks und Incidents">
     <title><?= h($pageTitle) ?> · NetLab Guardian</title>
-    <link rel="stylesheet" href="style.css?v=20261116-ajaxfix-3">
-    <script src="assets/js/interface.js?v=20261116-ajaxfix-3" defer></script>
+    <link rel="stylesheet" href="style.css?v=20261117-incident-direct-1">
+    <script src="assets/js/interface.js?v=20261117-incident-direct-1" defer></script>
 </head>
 <body class="<?= h($bodyClass) ?>">
 <div class="app-shell">

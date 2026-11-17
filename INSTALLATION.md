@@ -113,18 +113,72 @@ muss die Schul-IT die Passwort-SMTP-Anmeldung explizit erlauben; andernfalls
 ist diese Variante für das Postfach nicht verwendbar. Weitere Hinweise stehen in
 [README_MAIL.md](README_MAIL.md).
 
-## SMTP-Testmail per Kommandozeile
+## Incident-Bericht aus der Datenbank per Kommandozeile
 
 Wenn `config/incident_mail.php` ausgefüllt, das SMTP-Passwort per
 `sudo bash install.sh --set-mail-password` gespeichert und die Dienste mit
-`sudo bash install.sh --mail-only` eingerichtet wurden, verschickst du eine
-separate Testmail mit:
+`sudo bash install.sh --mail-only` eingerichtet wurden, verschickst du den
+**gespeicherten Incident-Bericht ohne erneute Geräteprüfung** mit:
 
 ```bash
 sudo bash install.sh --test-mail
 ```
 
-Die Testmail geht an alle konfigurierten Empfänger und enthält **keine Incidents**.
-Sie löst den Tagesbericht nicht aus und verändert seinen Versandstatus nicht.
+Die Mail geht an alle konfigurierten Empfänger und enthält die aktuell in SQLite
+gespeicherten offenen Incidents, im selben Design wie der Tagesbericht.
+Sie löst keine Geräteprüfung aus und verändert den täglichen Versandstatus nicht.
 Bei Problemen findest du Details unter
 `sudo journalctl -u netlab-incident-mail-test.service -n 50 --no-pager`.
+
+## E-Mail-Service in der Installation (SMTP)
+
+Beim ersten interaktiven `sudo bash install.sh` wird die SMTP-Einrichtung
+angeboten; die Eingaben umfassen Absender, Empfänger, Server, Port,
+Verschlüsselung, Versandzeit und Passwort (verdeckte Eingabe). Passwort und
+Projektdateien werden getrennt gespeichert.
+
+```bash
+sudo bash install.sh --setup-mail   # komplette SMTP-Konfiguration im Terminal
+sudo bash install.sh --mail-only    # systemd-Timer nach Änderung übernehmen
+sudo bash install.sh --test-mail    # denselben Bericht mit offenen Incidents sofort senden
+```
+
+Der Installer installiert zusätzlich PHP-GD für die Outlook-kompatiblen,
+eingebetteten Donut-Diagramme in HTML-Mails. Der Python-Check ermittelt außerdem
+bei erfolgreicher Cisco-Verbindung Hostname, Firmware, Modell, Seriennummer,
+Uptime und Software-Image. Bestehende SQLite-Daten werden nicht gelöscht.
+
+## Upgrade: Inventar und Incident-Bedienung
+
+Beim nächsten Aufruf des Installers bzw. beim ersten Datenbankzugriff
+werden `console_port` und `inventory_number` aus bestehenden SQLite-
+Inventaren entfernt. **Sichere die Datenbank `storage/inventory.sqlite` vor
+dem Update**, wenn du alte Werte behalten möchtest. SQLite 3.35+ ist nötig.
+`show license udi` und `show platform` werden von Python nur als zusätzliche
+Abfragen benutzt, wenn Modell, Typ oder Seriennummer fehlen.
+
+Auf `details.php#issues` können Administratoren Incidents direkt lösen.
+Nur manuell erzeugte Incidents dürfen dauerhaft gelöscht werden.
+
+
+## Täglicher Maildienst mit vorherigem Gerätecheck
+
+Der bereits eingerichtete systemd-Mailtimer startet jetzt automatisch zuerst
+alle **bekannten, aktiven und nicht ausgeschlossenen** Geräte mit dem vorhandenen
+Python-/Netmiko-Checker. Nach dem Speichern aller Ergebnisse und Incidents wird
+der E-Mail-Bericht erstellt und per SMTP versendet. Die Prüfung startet keinen
+IP-Scan. Der Bericht enthält eine kurze Check-Zusammenfassung.
+
+Im Gegensatz dazu liest `sudo bash install.sh --test-mail` nur die bereits
+gespeicherten Geräte/Incidents aus SQLite und verschickt den Bericht sofort,
+**ohne neue Gerätechecks** oder Änderung des täglichen Versandstatus.
+Installiere die aktualisierten systemd-Units einmalig:
+
+```bash
+sudo bash install.sh --mail-only
+sudo bash install.sh --test-mail
+```
+
+Falls ein gesamter Prüfzyklus technisch scheitert (z. B. Python-Umgebung fehlt),
+findet **kein Versand veralteter Ergebnisse** statt. Hinweise stehen im Journal
+`sudo journalctl -u netlab-incident-mail.service -n 50 --no-pager`.

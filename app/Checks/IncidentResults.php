@@ -173,6 +173,51 @@ function rackScanPosition(?string $position): array
     return [null, null];
 }
 
+/** Speichert ausschließlich plausible, erfolgreich gelesene Inventarfelder. */
+function rackSaveDiscoveredMetadata(DBInternalAPI $db, int $id, array $device, mixed $metadata, array $passwords): void
+{
+    if (!is_array($metadata)) return;
+    $limits = [
+        'hostname' => 80, 'model' => 120, 'firmware' => 120,
+        'serial_number' => 120, 'os_family' => 100,
+        'uptime' => 180, 'software_image' => 250,
+    ];
+    $updates = [];
+    foreach ($limits as $key => $limit) {
+        $value = $metadata[$key] ?? null;
+        if (!is_string($value) || trim($value) === '') continue;
+        $value = rackIssueText($value, $passwords, $limit);
+        if ($value === '' || str_contains($value, '[Passwort verborgen]')) continue;
+        if ($key === 'hostname') {
+            if (!preg_match('/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/D', $value)) continue;
+            $updates['discovered_hostname'] = $value;
+            // Manuell gesetzte Gerätenamen nicht ungefragt überschreiben.
+            $name = trim((string) ($device['hostname'] ?? ''));
+            if ($name === '' || str_starts_with($name, 'Scan-')) {
+                $updates['hostname'] = $value;
+            }
+        } elseif ($key === 'serial_number') {
+            // UNIQUE-Constraint: Bei einem Konflikt nicht den ganzen Check verwerfen.
+            $assigned = $db->all('device', ['serial_number' => $value], 1);
+            if (!$assigned || (int) $assigned[0]['id'] === $id) {
+                $updates[$key] = $value;
+            }
+        } else {
+            $updates[$key] = $value;
+        }
+    }
+    // Die Geräteklasse (Switch/Router/Sonstiges) wird bei einem eindeutig
+    // erkannten Modell übernommen; bei unklarer Ausgabe vorhandenen Wert behalten.
+    if (in_array($metadata['device_type'] ?? null, ['Switch', 'Router', 'Sonstiges'], true)
+        && (($device['device_type'] ?? '') !== $metadata['device_type'])) {
+        $updates['device_type'] = $metadata['device_type'];
+    }
+    if ($updates) {
+        $updates['last_discovered_at'] = gmdate('Y-m-d H:i:s');
+        $db->update('device', $id, $updates);
+    }
+}
+
 /**
  * Speichert Check-Fehler der vorhandenen Geräte und legt durch den IP-Scan
  * neu erkannte Geräte automatisch im ausgewählten Rack an. Eine IP wird nur
@@ -272,6 +317,16 @@ function saveRackCheckResults(
             $registered[] = ['id' => $deviceId, 'ip' => $ip, 'position' => $position];
         }
         $deviceId = (int) $device['id'];
+        // Auch bei Diagnosefehlern können verlässlich gelesene Gerätefelder
+        // übernommen werden; nicht aber nach Authentifizierungs-/Transportfehlern.
+        if (is_array($results[$ip] ?? null)
+            && in_array($status, ['ok', 'error'], true)
+            && $outcome['valid_response']
+            && is_array($results[$ip]['metadata'] ?? null)) {
+            rackSaveDiscoveredMetadata($db, $deviceId, $device, $results[$ip]['metadata'], $passwords);
+            $device = $db->get('device', $deviceId) ?? $device;
+            $devicesByIp[$ip] = $device;
+        }
         $counts[$status] = ($counts[$status] ?? 0) + 1;
 
         // Alle aktuellen Diagnosen genau einmal pro Gerät und stabiler Kennung.

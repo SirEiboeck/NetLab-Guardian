@@ -185,6 +185,11 @@
     document.addEventListener('submit', event => {
         const form = event.target;
         if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== 'post' || !form.closest('main.workspace')) return;
+        // Confirmation lives in the external script: inline onsubmit is blocked by CSP.
+        if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) {
+            event.preventDefault();
+            return;
+        }
         if (form.classList.contains('rack-dismiss-form')) {
             event.preventDefault();
             const notice = form.closest('.rack-check-notice');

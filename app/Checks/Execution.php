@@ -102,11 +102,11 @@ function rackCheckBatches(array $plans, array $defaults): array
 }
 
 /** Führt alle zu einem Rack gehörenden JSON-Pakete mit dem bestehenden main.py aus. */
-function runRackPlans(array $defaults, array $primary, array $retries): array
+function runRackPlans(array $defaults, array $primary, array $retries, int $timeoutSeconds = 90): array
 {
     $results = [];
     foreach (rackCheckBatches($primary, $defaults) as $config) {
-        $results = array_replace($results, executeRackCheck($config));
+        $results = array_replace($results, executeRackCheck($config, $timeoutSeconds));
     }
     // Bei einem Gerät mit mehreren Kennwörtern desselben Benutzers weitere
     // Kennwörter nur dann prüfen, wenn die bisherigen nicht akzeptiert wurden.
@@ -126,7 +126,7 @@ function runRackPlans(array $defaults, array $primary, array $retries): array
         }
         if ($retryPlans) {
             foreach (rackCheckBatches($retryPlans, $defaults) as $config) {
-                $results = array_replace($results, executeRackCheck($config));
+                $results = array_replace($results, executeRackCheck($config, $timeoutSeconds));
             }
         }
         ++$round;
@@ -156,7 +156,7 @@ function rackPythonFailureHint(string $stderr): string
 }
 
 /** Startet ausschließlich das fest hinterlegte Python-Skript, ohne Shell oder Benutzereingaben als Argumente. */
-function executeRackCheck(array $config): array
+function executeRackCheck(array $config, int $timeoutSeconds = 90): array
 {
     if (!function_exists('proc_open')) {
         throw new RuntimeException('PHP darf keine Prozesse starten (proc_open deaktiviert).');
@@ -204,8 +204,8 @@ function executeRackCheck(array $config): array
         $output = ['', ''];
         $start = microtime(true);
         while ($pipes) {
-            if (microtime(true) - $start > 90) {
-                throw new RuntimeException('Python-Check nach 90 Sekunden abgebrochen.');
+            if (microtime(true) - $start > $timeoutSeconds) {
+                throw new RuntimeException('Python-Check nach ' . $timeoutSeconds . ' Sekunden abgebrochen.');
             }
             $ready = array_values($pipes);
             $write = $except = [];
